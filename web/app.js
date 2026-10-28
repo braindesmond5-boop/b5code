@@ -753,11 +753,11 @@ function renderSide() {
     // Two or more accounts: each one's card, with its meters and whether it's full, above the foot.
     !phone && many ? accountCards() : null,
     phone ? spaceTabs : h("div", { class: "side-foot" },
-      h("button", { class: "me", type: "button", title: many ? "Your accounts and their usage" : "Your account and usage", onclick: () => openSettings("account") },
+      h("button", { class: "me", type: "button", title: !a ? "Sign in to Claude" : many ? "Your accounts and their usage" : "Your account and usage", onclick: () => (a || S.phone ? openSettings("account") : signInDialog()) },
         h("span", { class: "avatar", "aria-hidden": "true" }, (a?.email || "?").slice(0, 1).toUpperCase()),
         h("span", { class: "who" },
           h("b", { title: a?.email || "" }, a?.email ? a.email.split("@")[0] : "Not signed in"),
-          h("span", {}, a ? `${planShort(a.plan) || "Claude"}${many ? ` · ${accountsShown().length} accounts` : ""}` : "Run claude auth login")),
+          h("span", {}, a ? `${planShort(a.plan) || "Claude"}${many ? ` · ${accountsShown().length} accounts` : ""}` : S.phone ? `Sign in on the ${MAC()}` : "Sign in to Claude")),
         usageRing()),
       h("button", { class: "icon", type: "button", title: `Guide (${KEY()}/)`, "aria-label": "Guide", onclick: () => openGuide() }, icon("help", 16)),
       h("button", { class: "icon", type: "button", title: `Settings (${KEY()},)`, "aria-label": "Settings", onclick: () => openSettings() }, icon("settings", 16))),
@@ -965,8 +965,12 @@ function renderMainInner(main) {
     view = null;
     fill(main, h("div"), h("div", { class: "center" }, h("div", { class: "hello" },
       h("h1", {}, "Welcome to B5 Code"),
-      h("p", {}, "Add a project folder to start. Claude works inside it, with its CLAUDE.md, skills and memory."),
-      h("button", { class: "btn primary", type: "button", onclick: addProjectDialog }, "Add a project folder"))));
+      // Signing in comes first: nothing works before it.
+      ...(!S.account && !S.phone
+        ? [h("p", {}, "Sign in with your Claude subscription to start. Then add a project folder: Claude works inside it, with its CLAUDE.md, skills and memory."),
+          h("button", { class: "btn primary", type: "button", onclick: () => signInDialog() }, "Sign in to Claude")]
+        : [h("p", {}, "Add a project folder to start. Claude works inside it, with its CLAUDE.md, skills and memory."),
+          h("button", { class: "btn primary", type: "button", onclick: addProjectDialog }, "Add a project folder")]))));
     return;
   }
   if (S.view === "inbox") { renderInbox(main); return; }
@@ -3881,7 +3885,8 @@ function accountsSection() {
             a.plan, a.limitedUntil ? `at its usage limit until ${new Date(a.limitedUntil).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}` : "",
             a.notLinked?.length ? `not sharing: ${a.notLinked.join(", ")}` : "",
           ].filter(Boolean).join(" · "))),
-        a.id === "main" || S.phone ? usageRow(a) : h("button", { class: "btn quiet", type: "button", style: "color:var(--bad)", onclick: () => removeAccountDialog(a, draw) }, "Remove"))),
+        a.id === "main" && !a.signedIn && !S.phone ? h("button", { class: "btn primary", type: "button", onclick: () => signInDialog(draw) }, "Sign in…")
+          : a.id === "main" || S.phone ? usageRow(a) : h("button", { class: "btn quiet", type: "button", style: "color:var(--bad)", onclick: () => removeAccountDialog(a, draw) }, "Remove"))),
       S.phone ? null : h("label", { class: "set-row" },
         h("span", {}, h("span", { class: "set-title" }, "More than one account"),
           h("span", { class: "set-desc" }, "Add your other Claude subscriptions, and carry a thread on with another when one reaches its usage limit. Check that your plan's terms allow it.")),
@@ -3898,6 +3903,52 @@ function accountsSection() {
   };
   draw();
   return box;
+}
+
+/**
+ * Sign in to Claude when Claude Code isn't: its sign-in page in the browser, then the code it shows
+ * pasted here (`claude auth login`, run for you). B5 Code never sees the password.
+ */
+async function signInDialog(onDone) {
+  let login = null;
+  const step2 = h("div", { hidden: true });
+  const code = h("input", { id: "scode", placeholder: "Paste the code here", autocomplete: "off", spellcheck: "false", style: "width:100%" });
+  const linkRow = h("div", { class: "btns", style: "justify-content:flex-start;margin:6px 0 10px" });
+  dialog("Sign in to Claude", [
+    h("p", { class: "note", style: "margin:0 0 10px" }, "B5 Code works with your Claude subscription (Pro or Max) through Claude Code. You sign in on Claude's own page in your browser; B5 Code never sees your password."),
+    step2,
+  ], "Continue", async () => {
+    if (!login) {
+      login = await call("POST", "/api/accounts/main/sign-in", {});
+      // Claude Code prints the sign-in link a moment after it starts.
+      for (let i = 0; i < 40 && !login.url && login.state === "waiting"; i++) { await new Promise((r) => setTimeout(r, 300)); login = await call("GET", "/api/accounts/main/login"); }
+      if (!login.url) {
+        call("DELETE", "/api/accounts/main/login").catch(() => {});
+        login = null;
+        throw new Error("Claude Code didn't give a sign-in link. Press Continue to try again.");
+      }
+      fill(linkRow,
+        h("a", { class: "btn primary", href: login.url, target: "_blank", rel: "noopener" }, icon("external", 13), "Open the sign-in page"),
+        h("button", { class: "btn quiet", type: "button", onclick: () => copy(login.url) }, "Copy the link"));
+      fill(step2, h("label", { for: "scode" }, "1. Sign in, and approve. 2. Copy the code the page shows. 3. Paste it here."), linkRow, code);
+      step2.hidden = false;
+      document.querySelector(".dialog .btn.primary[type=submit]").textContent = "Sign in";
+      setTimeout(() => code.focus(), 0);
+      throw Object.assign(new Error(""), { keepOpen: true });
+    }
+    let r;
+    try { r = await call("POST", "/api/accounts/main/login", { code: code.value }); }
+    catch (e) {
+      // That sign-in has ended: Continue starts a new one.
+      login = null; code.value = ""; step2.hidden = true;
+      document.querySelector(".dialog .btn.primary[type=submit]").textContent = "Continue";
+      throw new Error(`${e.message.replace(/ Start again,? and paste the whole code\.$/, "")} Press Continue to try again, and paste the whole code.`);
+    }
+    S.account = r.account; S.accounts = r.accounts;
+    toast(`Signed in as ${r.account.email}`);
+    onDone?.();
+    render();
+  }, () => { if (login) call("DELETE", "/api/accounts/main/login").catch(() => {}); });
 }
 
 /** Sign in another account: Claude Code's sign-in page in the browser, then its code pasted here. */

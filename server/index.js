@@ -688,16 +688,20 @@ function accountsView() {
 
 const loginView = (l) => ({ id: l.id, url: loginUrl(l.out), state: l.state, message: l.message });
 
-function startLogin(name, email) {
+/**
+ * `main`: signing in the main account itself (Claude Code's own ~/.claude), for someone who isn't
+ * signed in yet: the same sign-in, without a folder of its own.
+ */
+function startLogin(name, email, { main = false } = {}) {
   for (const l of logins.values()) endLogin(l, true); // one at a time
-  const id = newAccountId();
-  const dir = accountDir(HOME, id);
-  ensureLinks(fs, CLAUDE_DIR, dir);
+  const id = main ? MAIN : newAccountId();
+  const dir = main ? null : accountDir(HOME, id);
+  if (dir) ensureLinks(fs, CLAUDE_DIR, dir);
   const acct = { id, dir };
   // BROWSER: don't open it ourselves; the page offers the link, since the browser may be signed in to the other account.
   // (A Mac's /usr/bin/true: Windows has none, so there Claude Code may open the browser as well.)
   const proc = spawn(claude()[0], [...claude()[1], "auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], { env: { ...accountEnv(process.env, acct), ...(IS_WIN ? {} : { BROWSER: "/usr/bin/true" }) }, stdio: ["pipe", "pipe", "pipe"] });
-  const l = { id, name, dir, proc, out: "", state: "waiting", message: "", timer: null };
+  const l = { id, name, dir, main, proc, out: "", state: "waiting", message: "", timer: null };
   const take = (d) => { l.out = (l.out + d).slice(-20000); };
   proc.stdout.on("data", take);
   proc.stderr.on("data", take);
@@ -719,6 +723,14 @@ async function finishLogin(l, code) {
     const t = setTimeout(resolve, 30000);
     l.proc.once("exit", () => { clearTimeout(t); resolve(); });
   });
+  if (l.main) {
+    await loadAccount(accountById(MAIN));
+    endLogin(l, false);
+    if (!account) throw new Error("That didn't sign in. Start again, and paste the whole code.");
+    refreshUsage();
+    broadcast(null, { kind: "accounts", accounts: accountsView() });
+    return { ok: true, account, accounts: accountsView() };
+  }
   const info = await authStatus({ id: l.id, dir: l.dir });
   if (!info?.signedIn) {
     // Claude Code's own words about it, without its sign-in instructions.
@@ -745,7 +757,7 @@ function endLogin(l, discard) {
   clearTimeout(l.timer);
   if (l.proc.exitCode === null) l.proc.kill();
   logins.delete(l.id);
-  if (discard && !(store.state.accounts || []).some((a) => a.id === l.id)) {
+  if (discard && l.dir && !(store.state.accounts || []).some((a) => a.id === l.id)) {
     try { removeAccountDir(fs, HOME, l.dir); } catch (e) { console.error(`Removing ${l.dir}: ${e.message}`); }
   }
 }
@@ -1785,6 +1797,13 @@ async function api(req, res, url) {
     if (req.b5Remote) return send(res, 403, { error: `Accounts are managed from the ${MAC}.` });
     const body = method === "POST" ? await readBody(req) : {};
     if (method === "GET" && parts.length === 1) return send(res, 200, { accounts: accountsView() });
+    // Signing in the main account (Settings, or the sidebar's "Sign in"): only while it isn't, so a
+    // click can't swap whose account Claude Code works on.
+    if (method === "POST" && parts[1] === MAIN && parts[2] === "sign-in") {
+      await loadAccount(accountById(MAIN));
+      if (account) return send(res, 409, { error: `Claude Code is signed in already, as ${account.email}.` });
+      return send(res, 200, startLogin("", String(body.email || "").trim().slice(0, 200), { main: true }));
+    }
     if (method === "POST" && parts.length === 1 && !store.state.settings?.extraAccounts) return send(res, 409, { error: "Turn on More than one account first (Settings › Account)." });
     if (method === "POST" && parts.length === 1) return send(res, 200, startLogin(String(body.name || "").trim().slice(0, 40), String(body.email || "").trim().slice(0, 200)));
     const id = parts[1];
