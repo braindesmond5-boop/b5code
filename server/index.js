@@ -38,6 +38,7 @@ import { Artifacts, ARTIFACT } from "./artifacts.js";
 import { cachedOverview as githubOverview } from "./github.js";
 import { STUDIO_URL, studioAsk, studioDir, studioRunning, startStudio } from "./studio.js";
 import { ASK_TOOL, questionsOf, cleanAnswers } from "../web/questions.js";
+import * as checkpoints from "./checkpoints.js";
 import { IS_WIN, HOME_DIR, realPath, appDataDir, expandHome, within, pagePath, claude, isShell, revealCommand, editorCommand, FILE_MANAGER } from "./platform.js";
 import { branchName, createWorktree, prStatus, mergePr, removeWorktree, prTemplate, openPrPrompt, unpushedCommits } from "./branches.js";
 
@@ -365,7 +366,7 @@ function sessionFor(thread) {
   let session;
   const spare = spares.get(project.id);
   // The spare runs in the project folder, so a thread on its own branch never takes it.
-  if (!thread.sessionId && !thread.dir && !thread.sideOf && spare && spare.session.running && (spare.session.model || null) === (thread.modelPref || null) && spare.session.account === acct.id) {
+  if (!thread.sessionId && !thread.dir && !thread.sideOf && spare && spare.session.running && (spare.session.model || null) === (thread.modelPref || null) && (spare.session.effort || null) === (thread.effort || null) && spare.session.account === acct.id) {
     clearTimeout(spare.timer);
     spares.delete(project.id);
     session = spare.session;
@@ -384,7 +385,7 @@ function sessionFor(thread) {
       side.push("--settings", JSON.stringify(queueSandboxSettings({ home: HOME, dataDir: store.dataDir, projectDir: project.dir, worktree: qt.dir, gitDir: qt.gitDir, commonDir: qt.commonDir, shared: qt.shared })));
     }
     session = new ClaudeSession({ cwd: thread.dir || project.dir, sessionId: thread.sessionId || thread.forkFrom || null, fork: !thread.sessionId && !!thread.forkFrom,
-      extraArgs: [...CLAUDE_ARGS, ...projectArgs(project), ...chatArgs(project), ...side], model: thread.modelPref || null, env: accountEnv(process.env, acct), account: acct.id });
+      extraArgs: [...CLAUDE_ARGS, ...projectArgs(project), ...chatArgs(project), ...side], model: thread.modelPref || null, effort: thread.effort || null, env: accountEnv(process.env, acct), account: acct.id });
   }
   session.on("event", (ev) => onEvent(thread.id, session, ev));
   session.on("exit", () => forgetSession(thread.id, session));
@@ -517,6 +518,9 @@ function onEvent(threadId, session, ev, spareProjectId = null) {
   if ((ev.kind === "done" && !ev.more) || ev.kind === "task_status") setTimeout(() => updateIfIdle().catch(() => {}), 2000); // an update waiting on this turn
   if (ev.kind === "done" && !ev.more) automationDone(threadId);
   if (ev.kind === "tool" && ev.change) turnEdited.add(threadId);
+  if (ev.kind === "done" && !ev.more) checkpointAfter(threadId);
+  // Effort changed during the turn: the next message starts Claude Code again with it.
+  if (ev.kind === "done" && !ev.more && session.effort !== (store.state.threads.find((x) => x.id === threadId)?.effort || null)) session.close();
   if (ev.kind === "done" && !ev.more && turnEdited.delete(threadId) && ev.ok) checksAfterTurn(threadId).catch((e) => console.error(`Checks: ${e.message}`));
   // The page takes the inbox's facts from here rather than working them out again.
   broadcast(threadId, inbox ? { ...ev, inbox } : ev);
@@ -1232,6 +1236,7 @@ async function throwAway(t) {
     await new Promise((resolve) => execFile("git", ["-C", project.dir, "worktree", "remove", "--force", t.root], { timeout: 60000 }, () => resolve()));
     await new Promise((resolve) => execFile("git", ["-C", project.dir, "branch", "-D", t.branch], { timeout: 20000 }, () => resolve()));
   }
+  dropCheckpoints(t);
   store.save(removeThread(store.state, t.id));
   store.deleteLog(t.id);
 }
@@ -1245,6 +1250,67 @@ function updateAwake() {
 }
 
 /** Send a message to a thread: a new turn, or (while one runs) a steer for it. */
+// ── Checkpoints ──────────────────────────────────────────────────────────────
+// The project's files saved before and after each turn (server/checkpoints.js), so a turn can be
+// rewound. A project that isn't in a git repository has none.
+
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+const cpIndex = (threadId) => path.join(store.dataDir, "checkpoints", `${threadId}.index`);
+const cpRoots = new Map(); // folder -> its repository's top folder, or "" when it has none
+const turnCp = new Map(); // threadId -> { n, root, pre }: the turn running, with the checkpoint made before it
+const cpBusy = new Map(); // threadId -> the rewind or checkpoint being made: one at a time per thread
+
+async function cpRoot(dir) {
+  if (!cpRoots.has(dir)) cpRoots.set(dir, (await checkpoints.repoRoot(dir)) || "");
+  return cpRoots.get(dir);
+}
+
+const patchThread = (id, patch) => { const t = store.state.threads.find((x) => x.id === id); if (t) store.save(updateThread(store.state, id, patch, t.updatedAt)); };
+
+/** Before a turn: save the files, and tell the page. Resolves when it's done (the message to Claude waits for it). */
+async function checkpointBefore(thread, dir, title) {
+  try {
+    const root = await cpRoot(dir);
+    if (!root) return;
+    const n = (store.state.threads.find((x) => x.id === thread.id)?.cpSeq || 0) + 1;
+    const pre = await checkpoints.snapshotSoon(root, cpIndex(thread.id), thread.id, `${n}-pre`);
+    if (!pre) return;
+    turnCp.set(thread.id, { n, root, pre });
+    const old = (store.state.threads.find((x) => x.id === thread.id)?.cps || []);
+    const cps = [...old, { n, pre: true, at: Date.now(), title: String(title || "").slice(0, 120) }];
+    const dropped = cps.splice(0, Math.max(0, cps.length - checkpoints.KEEP));
+    patchThread(thread.id, { cps, cpSeq: n, cpHere: null });
+    if (dropped.length) checkpoints.forget(root, thread.id, dropped.flatMap((c) => [`${c.n}-pre`, `${c.n}-post`]));
+    emit(thread.id, { kind: "checkpoint", n, title: cps[cps.length - 1].title });
+  } catch (e) { console.error(`Checkpoint: ${e.message}`); }
+}
+
+/** After a turn: save the files again, and list what the turn changed. */
+async function checkpointAfter(threadId) {
+  const cp = turnCp.get(threadId);
+  if (!cp) return;
+  turnCp.delete(threadId);
+  try {
+    const post = await checkpoints.snapshotSoon(cp.root, cpIndex(threadId), threadId, `${cp.n}-post`);
+    if (!post) return;
+    const files = await checkpoints.changes(cp.root, cp.pre, post);
+    if (!files.length) { checkpoints.forget(cp.root, threadId, [`${cp.n}-post`]); return; }
+    const { files: shown, more } = checkpoints.brief(files);
+    const t = store.state.threads.find((x) => x.id === threadId);
+    if (!t) return;
+    patchThread(threadId, { cps: (t.cps || []).map((c) => (c.n === cp.n ? { ...c, post: true, files: shown, more } : c)) });
+    emit(threadId, { kind: "checkpoint_done", n: cp.n, files: shown, more });
+  } catch (e) { console.error(`Checkpoint: ${e.message}`); }
+}
+
+/** Forget a thread's checkpoints (it was deleted). */
+function dropCheckpoints(thread) {
+  const p = store.state.projects.find((x) => x.id === thread.projectId);
+  if (p) checkpoints.forget(p.dir, thread.id);
+  try { fs.rmSync(cpIndex(thread.id), { force: true }); } catch { /* not there */ }
+  turnCp.delete(thread.id);
+}
+
 function sendToThread(thread, text, attachments, extra = {}) {
   // A new turn on an account at its limit goes to one that isn't, rather than be refused.
   const idle = !sessions.get(thread.id)?.session.busy;
@@ -1276,7 +1342,11 @@ function sendToThread(thread, text, attachments, extra = {}) {
   const ev = { kind: "user", text, files: attachments.map((a) => ({ path: a.path, name: a.name, type: a.type })), ...(steer ? { steer: true } : {}), ...extra };
   store.appendLog(thread.id, ev);
   broadcast(thread.id, ev);
-  s.send(buildContent(text, attachments, (p) => fs.readFileSync(p)));
+  // A rewind since Claude last heard from you: told in this message, so it doesn't work from files it remembers.
+  const note = store.state.threads.find((x) => x.id === thread.id)?.cpNote || "";
+  if (note) patchThread(thread.id, { cpNote: "" });
+  const before = !steer && dir ? checkpointBefore(thread, dir, text) : null;
+  s.send(buildContent(note ? `${note}\n\n${text}` : text, attachments, (p) => fs.readFileSync(p)), { before });
   store.save(updateThread(store.state, thread.id, {}));
   // A queued task's time limit counts from its latest turn (carrying on after a limit, too).
   if (thread.queueTask && !steer) { const qt = queueState().tasks.find((x) => x.id === thread.queueTask && x.status === "running"); if (qt) updateTask(qt.id, { turnAt: Date.now() }); }
@@ -2302,6 +2372,7 @@ async function api(req, res, url) {
   if (method === "POST" && parts[0] === "threads" && parts.length === 1) {
     const body = await readBody(req);
     const patch = cleanModel(body.model) ? { modelPref: cleanModel(body.model) } : {};
+    if (EFFORTS.includes(body.effort)) patch.effort = body.effort;
     // Studio's Claude tab: one thread per video, named after it (so it isn't renamed from its first message).
     if (typeof body.studioVideo === "string" && /^[a-z0-9-]{1,60}$/.test(body.studioVideo)) {
       patch.studioVideo = body.studioVideo;
@@ -2347,6 +2418,7 @@ async function api(req, res, url) {
         asks.delete(t.id);
         lastText.delete(t.id);
         store.deleteLog(t.id);
+        dropCheckpoints(t);
       }
       store.save(removeThread(store.state, thread.id));
       return send(res, 200, { ok: true });
@@ -2459,6 +2531,55 @@ async function api(req, res, url) {
       store.save(updateThread(store.state, thread.id, { modelPref: model }));
       sessions.get(thread.id)?.session.setModel(model);
       return send(res, 200, { ok: true });
+    }
+
+    // How hard Claude thinks (--effort): set when Claude Code starts, so a running one is started again for the next message.
+    if (method === "POST" && action === "effort") {
+      const body = await readBody(req);
+      const effort = EFFORTS.includes(body.effort) ? body.effort : null;
+      store.save(updateThread(store.state, thread.id, { effort }, thread.updatedAt));
+      const s = sessions.get(thread.id)?.session;
+      if (s && !s.busy) s.close();
+      return send(res, 200, { ok: true });
+    }
+
+    // Checkpoints: what a rewind would change, and the rewind itself.
+    if (action === "checkpoints" && method === "POST") {
+      const dir = thread.dir || store.state.projects.find((p) => p.id === thread.projectId)?.dir;
+      const root = dir ? await cpRoot(dir) : "";
+      if (!root) return send(res, 409, { error: "This project isn't in a git repository, so it has no checkpoints." });
+      const body = await readBody(req);
+      const name = String(body.to || "");
+      const known = new Set([...(thread.cps || []).flatMap((c) => [c.pre && `${c.n}-pre`, c.post && `${c.n}-post`]), ...(thread.cpUndos || [])].filter(Boolean));
+      if (!known.has(name)) return send(res, 404, { error: "That checkpoint is gone." });
+      const sha = (await git(["rev-parse", "--verify", "--quiet", `refs/b5/${thread.id}/${name}`], root));
+      if (!sha) return send(res, 404, { error: "That checkpoint is gone." });
+      const s = sessions.get(thread.id)?.session;
+      if (s?.busy || cpBusy.has(thread.id)) return send(res, 409, { error: "Claude is working. Stop it, or wait for it to finish, then go back." });
+      const job = (async () => {
+        // What it would change: from how things are now (saved as "peek") to that checkpoint.
+        if (parts[3] === "preview") {
+          const now = await checkpoints.snapshot(root, cpIndex(thread.id), thread.id, "peek");
+          const files = await checkpoints.changes(root, now, sha);
+          return { files: files.slice(0, 200), count: files.length };
+        }
+        const label = body.label ? String(body.label).slice(0, 120) : name;
+        const undoName = `undo-${Date.now()}`;
+        const { files, undo } = await checkpoints.restore(root, cpIndex(thread.id), thread.id, sha, undoName);
+        const t = store.state.threads.find((x) => x.id === thread.id);
+        const undos = [...(t?.cpUndos || []), undoName];
+        for (const old of undos.splice(0, Math.max(0, undos.length - 5))) checkpoints.forget(root, thread.id, [old]);
+        const shown = checkpoints.brief(files);
+        const list = files.slice(0, 12).map((f) => f.path).join(", ");
+        patchThread(thread.id, { cpUndos: undos, cpHere: name,
+          cpNote: `[B5 Code: the project's files were put back to ${label}. ${files.length} file${files.length === 1 ? "" : "s"} changed${list ? `: ${list}${files.length > 12 ? ", …" : ""}` : ""}. Read a file again before you edit it; what you remember of it may be out of date.]` });
+        emit(thread.id, { kind: "rewind", to: name, label, files: shown.files, more: shown.more, undo: undoName });
+        return { files: files.length, undo: undoName };
+      })();
+      cpBusy.set(thread.id, job);
+      try { return send(res, 200, await job); }
+      catch (e) { return send(res, 500, { error: `Couldn't go back: ${e.message}` }); }
+      finally { cpBusy.delete(thread.id); }
     }
 
     if (method === "POST" && action === "stop") {

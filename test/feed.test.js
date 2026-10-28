@@ -167,3 +167,23 @@ test("a command Claude waited on isn't background work, even from an older log",
   const f = run([{ kind: "user", text: "Go" }, { kind: "task_start", id: "c", text: "Commit", type: "command", background: false }]);
   assert.deepEqual(f.tasks, []);
 });
+
+test("checkpoints: a message gets its way back, a turn that changed files a line, and a rewind a line of its own", () => {
+  const f = run([
+    { kind: "user", text: "Add a toggle" }, { kind: "checkpoint", n: 1 },
+    { kind: "text", text: "Done" }, { kind: "done", ok: true },
+    { kind: "checkpoint_done", n: 1, files: [{ s: "M", path: "a.js", add: "3", del: "1" }], more: 2 },
+    { kind: "rewind", to: "1-pre", label: "before “Add a toggle”", files: [{ s: "M", path: "a.js" }], more: 0, undo: "undo-1" },
+  ]);
+  assert.equal(f.items[0].cp, 1, "the message knows its checkpoint");
+  const line = f.items.find((i) => i.type === "cp");
+  assert.deepEqual([line.n, line.files.length, line.more], [1, 1, 2]);
+  assert.deepEqual(f.items.at(-1).type, "rewind");
+  assert.equal(f.items.at(-1).undo, "undo-1");
+  // A steer sent mid-turn is no turn of its own: the checkpoint goes to the message that started it.
+  const g = run([{ kind: "user", text: "First" }, { kind: "user", text: "Also this", steer: true }, { kind: "checkpoint", n: 2 }]);
+  assert.equal(g.items[0].cp, 2);
+  assert.equal(g.items[1].cp, undefined);
+  // A replayed log without them (a thread from before checkpoints) draws as it always did.
+  assert.equal(run([{ kind: "user", text: "Old" }, { kind: "text", text: "Hi" }, { kind: "done", ok: true }]).items.some((i) => i.cp || i.type === "cp"), false);
+});

@@ -87,12 +87,13 @@ async function call(method, url, body) {
 }
 
 let toastTimer;
-function toast(text) {
+function toast(text, action = null) {
   document.querySelector(".toast")?.remove();
-  const t = h("div", { class: "toast", role: "status" }, text);
+  const t = h("div", { class: "toast", role: "status" }, text,
+    action ? h("button", { type: "button", class: "toast-action", onclick: () => { t.remove(); action.run(); } }, action.label) : null);
   document.body.append(t);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.remove(), 3200);
+  toastTimer = setTimeout(() => t.remove(), action ? 9000 : 3200);
 }
 
 const ago = (ms) => {
@@ -130,6 +131,7 @@ const home = (p) => {
 const S = {
   projects: [], threads: [], running: {}, commands: {}, account: null, models: [], usage: null,
   newModel: store.get("newModel", null), // model for threads not yet started
+  newEffort: store.get("newEffort", null), // effort for threads not yet started
   newBranch: null, // { kind, issue, what } when the next new thread gets its own branch
   pr: {}, // threadId -> { pr, prompt, removed, loading, error } for threads on their own branch
   git: {}, // threadId -> where its folder stands in git (server: gitState), for the next-step buttons
@@ -347,6 +349,7 @@ function connect() {
     if (!S.threads.some((x) => x.id === threadId)) reloadStateSoon();
     const feed = feedOf(threadId);
     apply(feed, event);
+    noteCheckpoints(threadId, event);
     if (threadId === studioChat.threadId) studioChatSoon();
     // Changes show as they land: after an edit, or a command that may have written files.
     if (event.kind === "tool_result" && threadId === S.threadId) {
@@ -1460,7 +1463,9 @@ function itemSig(it, t) {
   if (it.type === "ai") return (it.live ? "live:" : "") + it.text;
   if (it.type === "steps") return JSON.stringify([S.open.has(it.key), it.steps.map((x) => [x.state, x.summary, S.open.has("step-" + x.id), x.result || ""])]);
   if (it.type === "ask") return `${t?.id}:${it.answer}`;
-  if (it.type === "user") return `${S.previewBase}:${it.steer || ""}`;
+  if (it.type === "user") return `${S.previewBase}:${it.steer || ""}:${it.cp || ""}`;
+  if (it.type === "cp") return `${t?.cpHere || ""}:${it.files.length}`;
+  if (it.type === "rewind") return `${canUndoRewind(it, t)}`;
   if (it.type === "limit") return `${it.state}:${it.resumeAt}`;
   if (it.type === "recap") return `${S.open.has(recapKey(it))}`;
   if (it.type === "artifact") return `${it.version}:${it.title}:${cardShowing(it)}`;
@@ -1504,6 +1509,9 @@ function renderItem(it, t) {
         ? h("button", { type: "button", class: "sent-img", title: f.name, onclick: () => openPreview(f.path) }, h("img", { src: previewUrl(f.path), alt: f.name }))
         : h("button", { type: "button", class: "file-chip", title: f.path, onclick: () => openPreview(f.path) }, icon("file", 13), h("span", {}, f.name)))) : null,
       it.text ? h("div", { class: "msg-user" + (it.steer ? " steer" : "") }, it.text) : null,
+      it.cp && !it.steer && t?.cps?.some((c) => c.n === it.cp && c.pre)
+        ? h("button", { class: "msg-rewind", type: "button", title: "Rewind the files to before this message", "aria-label": "Rewind the files to before this message",
+          onclick: () => rewindDialog(t, `${it.cp}-pre`, `before “${shortTitle(it.text)}”`) }, icon("undo", 14)) : null,
       it.steer ? h("div", { class: "msg-tag" + (it.steer === "lost" ? " bad" : "") }, it.steer === "queued" ? "Sent while working · Claude reads it at its next step"
         : it.steer === "taken" ? "Sent while working · Claude has it" : "Sent while working · Claude didn't get it. Send it again.") : null,
       it.auto ? h("div", { class: "msg-tag" }, it.auto === "switch" ? "Sent by B5 Code on your other account" : it.auto === "queue" ? "Sent by B5 Code's overnight queue"
@@ -1511,6 +1519,8 @@ function renderItem(it, t) {
           : it.auto === "automation" ? "Started by an automation" : "Sent by B5 Code when your usage limit reset") : null);
   }
   if (it.type === "recap") return recapCard(it);
+  if (it.type === "cp") return cpLine(it, t);
+  if (it.type === "rewind") return rewindLine(it, t);
   if (it.type === "limit") return limitCard(it, t);
   if (it.type === "note") return h("div", { class: "note", style: "text-align:center" }, it.text);
   if (it.type === "ai") {
@@ -1762,9 +1772,13 @@ function buildComposer() {
       h("input", { type: "file", id: "file-input", multiple: true, hidden: true, onchange: (e) => { addFiles(e.target.files); e.target.value = ""; } }),
       ta,
       h("div", { class: "menu-pop", id: "model-menu", hidden: true, role: "menu", "aria-label": "Model" }),
+      h("div", { class: "menu-pop", id: "effort-menu", hidden: true, role: "menu", "aria-label": "Effort" }),
+      h("div", { class: "menu-pop wide", id: "cp-menu", hidden: true, role: "dialog", "aria-label": "Checkpoints" }),
       h("div", { class: "tools" },
         h("button", { class: "icon plus", id: "plus", type: "button", title: "Add photos, files and more", "aria-label": "Add", "aria-haspopup": "menu", onclick: togglePlusMenu }, icon("plus", 17)),
         h("button", { class: "chip", id: "model-chip", type: "button", title: "Model", "aria-haspopup": "menu", onclick: toggleModelMenu }),
+        h("button", { class: "chip", id: "effort-chip", type: "button", "aria-haspopup": "menu", onclick: toggleEffortMenu }),
+        h("button", { class: "chip", id: "cp-chip", type: "button", hidden: true, "aria-haspopup": "dialog", onclick: toggleCpMenu }),
         h("button", { class: "chip skills", type: "button", title: "Skills and commands", "aria-label": "Skills and commands", onclick: openSlash }, icon("slash", 13), h("span", {}, "Skills")),
         h("button", { class: "chip", id: "where-chip", type: "button", onclick: () => { if (!thread()) pickBranch(); } }),
         h("span", { class: "spacer" }),
@@ -1801,6 +1815,8 @@ function updateComposer(feed) {
   chip.classList.toggle("static", !!t);
   chip.title = t ? (t.branch ? `On its own branch, in ${home(t.dir)}` : `In ${p ? home(p.dir) : ""}`) : "Where this thread works: the project, or a new branch of its own";
   fill($("model-chip"), h("span", {}, currentModelName()), icon("chevronDown", 12));
+  fillEffortChip();
+  fillCpChip();
   sendButton(feed);
   renderTodos(feed);
   renderTasks(feed);
@@ -2092,6 +2108,179 @@ async function chooseModel(value) {
   toast(`Model: ${currentModelName()}`);
 }
 
+// ── Effort ───────────────────────────────────────────────────────────────────
+// How hard Claude thinks: passed to Claude Code as --effort when it starts, so a change applies from the next message.
+
+const EFFORTS = [
+  { id: "low", name: "Low", desc: "Quick and cheap. Renames, small fixes, questions." },
+  { id: "medium", name: "Medium", desc: "A balance for everyday changes." },
+  { id: "high", name: "High", desc: "Thinks it through. Good for most features and bugs." },
+  { id: "xhigh", name: "Extra high", desc: "Slower. Tricky bugs and changes across many files." },
+  { id: "max", name: "Max", desc: "As deep as it goes. Slowest, and uses the most of your plan." },
+];
+const effortOf = (id) => EFFORTS.find((x) => x.id === id) || null;
+const currentEffort = (t = thread()) => (t ? t.effort || null : S.newEffort || null);
+const effortBars = (id) => { const n = EFFORTS.findIndex((x) => x.id === id) + 1; return h("span", { class: "bars", "aria-hidden": "true" }, ...[1, 2, 3, 4, 5].map((i) => h("i", { class: i <= n ? "on" : "" }))); };
+
+function fillEffortChip() {
+  const chip = $("effort-chip");
+  if (!chip) return;
+  const e = effortOf(currentEffort());
+  fill(chip, effortBars(e?.id), h("span", { class: "effort-name" }, e ? e.name : "Effort"));
+  chip.title = e ? `Effort: ${e.name}. How hard Claude thinks.` : "Effort: how hard Claude thinks. Now your Claude Code setting.";
+}
+
+/** Put a menu above its chip, inside the composer (on a phone, across it). */
+function placeMenu(menu, chip) {
+  const room = menu.parentElement.clientWidth;
+  menu.style.left = narrow() ? "0" : `${Math.max(0, Math.min(chip.offsetLeft - 6, room - Math.max(menu.offsetWidth, 340)))}px`;
+}
+
+/** Open one of the composer's menus (closing the others); it closes on a click anywhere else. */
+function openMenu(id, chipId, draw) {
+  for (const other of ["model-menu", "effort-menu", "cp-menu"]) if (other !== id) $(other).hidden = true;
+  const menu = $(id), chip = $(chipId);
+  if (!menu.hidden) { menu.hidden = true; return; }
+  draw(menu);
+  menu.hidden = false;
+  placeMenu(menu, chip);
+  const close = (e) => { if (!menu.contains(e.target) && !chip.contains(e.target)) { menu.hidden = true; document.removeEventListener("mousedown", close); } };
+  document.addEventListener("mousedown", close);
+}
+
+function toggleEffortMenu() {
+  openMenu("effort-menu", "effort-chip", (menu) => {
+    const pick = currentEffort();
+    fill(menu,
+      h("button", { type: "button", role: "menuitemradio", "aria-checked": String(!pick), class: !pick ? "on" : "", onclick: () => chooseEffort(null) },
+        h("span", { class: "tick" }, !pick ? icon("check", 14) : null),
+        h("span", { class: "eff-bars" }),
+        h("span", {}, h("div", { class: "m-name" }, "Default"), h("div", { class: "m-desc" }, "What your Claude Code setting says for the model"))),
+      ...EFFORTS.map((e) => h("button", { type: "button", role: "menuitemradio", "aria-checked": String(e.id === pick), class: e.id === pick ? "on" : "", onclick: () => chooseEffort(e.id) },
+        h("span", { class: "tick" }, e.id === pick ? icon("check", 14) : null),
+        h("span", { class: "eff-bars" }, effortBars(e.id)),
+        h("span", {}, h("div", { class: "m-name" }, e.name), h("div", { class: "m-desc" }, e.desc)))),
+      h("div", { class: "menu-tip" }, "Applies from your next message. Higher effort takes longer and uses more of your plan."));
+  });
+}
+
+async function chooseEffort(value) {
+  $("effort-menu").hidden = true;
+  const t = thread();
+  if (t) {
+    t.effort = value;
+    try { await call("POST", `/api/threads/${t.id}/effort`, { effort: value }); } catch (e) { toast(e.message); }
+  } else {
+    S.newEffort = value;
+    store.set("newEffort", value);
+  }
+  updateComposer(t ? feedOf(t.id) : emptyFeed());
+  toast(value ? `Effort: ${effortOf(value).name}, from your next message` : "Effort: your Claude Code setting, from your next message");
+}
+
+// ── Checkpoints ──────────────────────────────────────────────────────────────
+// The project's files, saved before and after each turn (server/checkpoints.js): a way back under each of
+// your messages, a line after each turn that changed files, and a list under the box.
+
+const shortTitle = (s) => { const x = String(s || "").replace(/\s+/g, " ").trim(); return x.length > 48 ? x.slice(0, 47) + "…" : x; };
+const timeOfDay = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "");
+const filesWord = (n) => `${n} file${n === 1 ? "" : "s"}`;
+
+/** A live checkpoint event: the thread's own record of them is kept up to date (the server's is the same). */
+function noteCheckpoints(threadId, ev) {
+  const t = S.threads.find((x) => x.id === threadId);
+  if (!t) return;
+  if (ev.kind === "checkpoint") { t.cps = [...(t.cps || []), { n: ev.n, pre: true, at: ev.at || Date.now(), title: ev.title || "" }].slice(-40); t.cpHere = null; }
+  else if (ev.kind === "checkpoint_done") t.cps = (t.cps || []).map((c) => (c.n === ev.n ? { ...c, post: true, files: ev.files, more: ev.more } : c));
+  else if (ev.kind === "rewind") { t.cpHere = ev.to; t.cpUndos = [...(t.cpUndos || []), ev.undo].slice(-5); }
+  else return;
+  if (threadId === S.threadId) { fillCpChip(); scheduleRender(); }
+}
+
+/** The checkpoints you can go back to, newest first: after each turn that changed files, then the start. */
+function cpEntries(t) {
+  const cps = t?.cps || [];
+  const out = [...cps].reverse().filter((c) => c.post).map((c) => ({ name: `${c.n}-post`, title: c.title, at: c.at, files: (c.files?.length || 0) + (c.more || 0), start: false }));
+  const first = cps[0];
+  if (first?.pre && out.length) out.push({ name: `${first.n}-pre`, title: first.title, at: first.at, files: 0, start: true });
+  return out;
+}
+/** Where the files are: the checkpoint last gone back to, else after the latest turn. */
+const cpNow = (t) => t?.cpHere || cpEntries(t).find((e) => !e.start)?.name || null;
+const cpLabel = (e) => (e.start ? `before “${shortTitle(e.title)}”` : `after “${shortTitle(e.title)}”`);
+
+function fillCpChip() {
+  const chip = $("cp-chip");
+  if (!chip) return;
+  const t = thread(), list = t ? cpEntries(t) : [];
+  chip.hidden = !list.length;
+  if (list.length) {
+    fill(chip, icon("clock", 13), h("span", { class: "cp-word" }, "Checkpoints"), h("span", { class: "cp-count" }, String(list.length)));
+    chip.title = "Go back to how the files were before or after an earlier turn";
+  }
+}
+
+function toggleCpMenu() {
+  openMenu("cp-menu", "cp-chip", (menu) => {
+    const t = thread(), here = cpNow(t);
+    fill(menu,
+      h("div", { class: "cp-head" }, "Checkpoints", h("span", {}, "Saved before and after each turn")),
+      h("div", { class: "cp-list" }, ...cpEntries(t).map((e) => h("button", { type: "button", class: "cp-item" + (e.name === here ? " now" : ""),
+        onclick: () => { menu.hidden = true; if (e.name === here) toast("Your files are already here"); else rewindDialog(t, e.name, cpLabel(e)); } },
+      h("span", { class: "cp-node" }),
+      h("span", { class: "cp-text" }, h("span", { class: "cp-t" }, e.start ? `Start: ${shortTitle(e.title)}` : shortTitle(e.title)),
+        h("span", { class: "cp-s" }, [timeOfDay(e.at), e.start ? "before the first message" : filesWord(e.files), e.name === here ? "where your files are now" : ""].filter(Boolean).join(" · "))),
+      e.name === here ? null : h("span", { class: "cp-go" }, "Go back")))));
+  });
+}
+
+const CP_WORD = { A: ["restored", "ok"], D: ["removed", "bad"], M: ["reverted", "warn"] };
+
+/** What going back would change, then the question. `name`: the checkpoint ("3-pre", "2-post"); `label`: how it's called. */
+async function rewindDialog(t, name, label) {
+  let r;
+  try { r = await call("POST", `/api/threads/${t.id}/checkpoints/preview`, { to: name }); } catch (e) { return toast(e.message); }
+  if (!r.count) return toast("Nothing to go back: the files are already like that");
+  const before = name.endsWith("-pre");
+  dialog(before ? "Rewind to before this message?" : "Go back to this checkpoint?", [
+    h("p", { class: "note", style: "margin:0" }, `${filesWord(r.count)} will go back to how ${r.count === 1 ? "it was" : "they were"} ${label}.`),
+    h("div", { class: "cp-files" }, ...r.files.map((f) => h("div", {}, h("span", { class: "cp-k " + (CP_WORD[f.s]?.[1] || "") }, CP_WORD[f.s]?.[0] || "changed"), h("code", {}, f.path))),
+      r.count > r.files.length ? h("div", { class: "cp-more" }, `and ${r.count - r.files.length} more`) : null),
+    h("p", { class: "note cp-safe", style: "margin:0" }, "Nothing is lost: how the files are now is saved first, so you can undo this. Claude is told the files went back. Its conversation stays as it is."),
+  ], "Go back", async () => {
+    const done = await call("POST", `/api/threads/${t.id}/checkpoints/restore`, { to: name, label });
+    toast(`${filesWord(done.files)} went back`, { label: "Undo", run: () => undoRewind(t, done.undo) });
+  });
+}
+
+async function undoRewind(t, undo) {
+  try {
+    await call("POST", `/api/threads/${t.id}/checkpoints/restore`, { to: undo, label: "how they were before you went back" });
+    toast("Back where you were");
+  } catch (e) { toast(e.message); }
+}
+
+/** The line after a turn that changed files: click to go back to how they were then. */
+function cpLine(it, t) {
+  const c = t?.cps?.find((x) => x.n === it.n);
+  const here = !!t && t.cpHere === `${it.n}-post`;
+  const total = it.files.length + it.more;
+  return h("div", { class: "cp-line" + (here ? " here" : "") },
+    h("button", { type: "button", title: "Go back to how the files were after this turn",
+      onclick: () => { if (here) toast("Your files are already here"); else rewindDialog(t, `${it.n}-post`, `after “${shortTitle(c?.title || "this turn")}”`); } },
+    icon("clock", 12), h("span", {}, `${here ? "Files are here" : "Checkpoint"} · ${filesWord(total)}${it.at ? " · " + timeOfDay(it.at) : ""}`)));
+}
+
+const canUndoRewind = (it, t) => !!it.undo && !!t?.cpUndos?.includes(it.undo) && t.cpUndos[t.cpUndos.length - 1] === it.undo && t.cpHere === it.to;
+
+/** The line where files went back: what it was, and Undo while it's the latest. */
+function rewindLine(it, t) {
+  const total = it.files.length + it.more;
+  return h("div", { class: "cp-line rewound" },
+    h("span", { class: "cp-rw" }, icon("undo", 12), h("span", {}, `Files went back to ${it.label} · ${filesWord(total)}`)),
+    canUndoRewind(it, t) ? h("button", { type: "button", class: "cp-undo", onclick: () => undoRewind(t, it.undo) }, "Undo") : null);
+}
+
 // ── Dictation ────────────────────────────────────────────────────────────────
 // In the Mac app, the native side listens (Apple's speech recognition) and
 // sends the words back through window.deskDictation. In a browser that has
@@ -2192,7 +2381,9 @@ function togglePlusMenu() {
   fill(menu, 
     item("paperclip", "Add photos & files", "Screenshots go in as images Claude can see", () => $("file-input").click()),
     item("slash", "Skills and commands", "Run a skill, like /flaevo-plan", openSlash),
-    item("eye", "Open a file in Preview", "A plan page, screenshot, PDF or video", pickPreviewFile));
+    item("eye", "Open a file in Preview", "A plan page, screenshot, PDF or video", pickPreviewFile),
+    // On a phone the row is full: the checkpoints list is here instead of a chip.
+    narrow() && thread() && cpEntries(thread()).length ? item("clock", "Checkpoints", "Go back to how the files were earlier", toggleCpMenu) : null);
   menu.hidden = false;
   const close = (e) => { if (!menu.contains(e.target) && !$("plus").contains(e.target)) { menu.hidden = true; document.removeEventListener("mousedown", close); } };
   document.addEventListener("mousedown", close);
@@ -2360,7 +2551,7 @@ async function sendNow() {
   try {
     if (!t) {
       if (S.newBranch) toast(`Making the branch ${newBranchName()}…`);
-      t = await call("POST", "/api/threads", { projectId: S.projectId, model: newModel(), branch: S.newBranch });
+      t = await call("POST", "/api/threads", { projectId: S.projectId, model: newModel(), effort: S.newEffort, branch: S.newBranch });
       S.newBranch = null;
       S.threads.unshift(t);
       S.feeds.set(t.id, emptyFeed());

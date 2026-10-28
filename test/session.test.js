@@ -184,3 +184,29 @@ test("a question is answered by allowing it with the answers; never allowed with
   assert.deepEqual(sent[1].response.response, { behavior: "allow", updatedInput: input });
   assert.match(sent[2].response.response.message, /skipped the question/);
 });
+
+test("a message waits for what it's sent `before`, and messages stay in order", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b5-gate-"));
+  const log = path.join(dir, "got.log");
+  const script = path.join(dir, "claude.js");
+  fs.writeFileSync(script, `const fs = require("fs");
+process.stdin.on("data", (d) => { for (const l of String(d).split("\\n")) if (l) { const m = JSON.parse(l); if (m.type === "user") fs.appendFileSync(${JSON.stringify(log)}, m.message.content + "\\n"); } });
+setInterval(() => {}, 1000);`);
+  const s = new ClaudeSession({ cwd: dir, command: [process.execPath, script] });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  s.send("first", { before: gate });
+  s.send("second");
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "", "", "nothing reaches Claude Code before the checkpoint is made");
+  release();
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(fs.readFileSync(log, "utf8"), "first\nsecond\n");
+  // One that fails doesn't hold the messages back for good.
+  const s2 = new ClaudeSession({ cwd: dir, command: [process.execPath, script] });
+  s2.send("third", { before: Promise.reject(new Error("no checkpoint")) });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.match(fs.readFileSync(log, "utf8"), /third/);
+  s.close({ now: true }); s2.close({ now: true });
+  fs.rmSync(dir, { recursive: true, force: true });
+});

@@ -32,7 +32,7 @@ export class ClaudeSession extends EventEmitter {
    * `sessionId` stays null till then and a start before it forks again.
    * `command`: what to run instead of Claude Code (tests: a command, or [command, ...its args]); by default `claude` (server/platform.js).
    */
-  constructor({ cwd, sessionId = null, fork = false, command = null, extraArgs = [], model = null, env = process.env, account = "main" }) {
+  constructor({ cwd, sessionId = null, fork = false, command = null, extraArgs = [], model = null, effort = null, env = process.env, account = "main" }) {
     super();
     this.env = env; // an extra account's sets CLAUDE_CONFIG_DIR (server/accounts.js)
     this.account = account;
@@ -42,6 +42,8 @@ export class ClaudeSession extends EventEmitter {
     [this.command, this.commandArgs] = !command ? claude() : Array.isArray(command) ? [command[0], command.slice(1)] : [command, []];
     this.extraArgs = extraArgs;
     this.model = model;
+    this.effort = effort; // `--effort`, set when the process starts: a change waits for the next one
+    this.gate = null; // the last message's write: the next one follows it
     this.proc = null;
     this.busy = false;
     this.pending = new Map(); // requestId -> the tool input it asked about
@@ -74,6 +76,7 @@ export class ClaudeSession extends EventEmitter {
     if (this.sessionId) args.push("--resume", this.sessionId);
     else if (this.forkFrom) args.push("--resume", this.forkFrom, "--fork-session");
     if (this.model) args.push("--model", this.model);
+    if (this.effort) args.push("--effort", this.effort);
     this.emit("event", { kind: "phase", phase: "starting" });
     const proc = spawn(this.command, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: this.env });
     this.proc = proc;
@@ -203,9 +206,10 @@ export class ClaudeSession extends EventEmitter {
 
   /**
    * @param {string | object[]} text plain text, or content blocks (text and images)
+   * @param {{before?: Promise}} opts `before`: the message goes to Claude Code only once this settles
    * @returns {boolean} whether it steers a turn that's already running
    */
-  send(text) {
+  send(text, { before = null } = {}) {
     const cold = !this.proc;
     if (cold) this.#start();
     const steer = this.busy;
@@ -215,7 +219,8 @@ export class ClaudeSession extends EventEmitter {
     this.queued.push({ uuid, steer });
     // A warm process was already waiting: the next stage is the model.
     if (!cold && !steer) this.emit("event", { kind: "phase", phase: "waiting" });
-    this.#write({ type: "user", uuid, message: { role: "user", content: text } });
+    // Written once `before` is done (the files saved as a checkpoint), and in order after any message still waiting on its own.
+    this.gate = Promise.resolve(this.gate).then(() => before).catch(() => {}).then(() => this.#write({ type: "user", uuid, message: { role: "user", content: text } }));
     return steer;
   }
 

@@ -246,6 +246,21 @@ export function apply(feed, ev) {
       break;
     }
 
+    // The files saved before this turn (its message gets a way back), and after it (a line to go back to).
+    case "checkpoint": {
+      for (let i = feed.items.length - 1; i >= 0; i--) {
+        const it = feed.items[i];
+        if (it.type === "user" && !it.steer) { if (!it.cp) it.cp = ev.n; break; }
+      }
+      break;
+    }
+    case "checkpoint_done":
+      feed.items.push({ type: "cp", n: ev.n, files: ev.files || [], more: ev.more || 0, at: ev.at || 0 });
+      break;
+    case "rewind":
+      feed.items.push({ type: "rewind", to: ev.to, label: ev.label || "", files: ev.files || [], more: ev.more || 0, undo: ev.undo || "", at: ev.at || 0 });
+      break;
+
     case "error":
       finishLive(feed);
       feed.working = false;
