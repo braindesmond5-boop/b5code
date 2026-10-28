@@ -983,6 +983,10 @@ body.native .acct-side { border-top-color: rgba(0, 0, 0, 0.06); }
 .q-report details, .q-task details { font-size: 13px; }
 .q-report summary, .q-task summary { color: var(--muted); cursor: default; }
 .q-reply { font-size: 13.5px; margin-top: 6px; }
+.q-nowait { border-top: 1px solid var(--border-soft); margin-top: 2px; }
+.q-nowait .set-row { border-bottom: none; padding: 10px 0 0; }
+.q-skipped { margin: 6px 0 0; padding-left: 18px; color: var(--muted); overflow-wrap: anywhere; }
+.q-skipped li + li { margin-top: 3px; }
 .q-out { margin: 6px 0 0; padding: 9px 11px; border-radius: 8px; background: var(--code); border: 1px solid var(--border-soft); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
 @media (max-width: 760px) { .q-add textarea, .q-add input, .q-at input { font-size: 16px; } .q-add textarea { resize: none; } }
 

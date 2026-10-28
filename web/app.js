@@ -333,7 +333,7 @@ function connect() {
       if (event.kind === "plan-usage" && document.querySelector(".usage-sheet")) openUsage();
       return;
     }
-    if (event.kind === "accounts") { S.accounts = event.accounts; scheduleRender(); return; }
+    if (event.kind === "accounts") { S.accounts = event.accounts; if ("account" in event) S.account = event.account; scheduleRender(); return; }
     if (event.kind === "restarting") { comeBack(); return; } // updating itself
     if (event.kind === "automations") { S.automations = event.automations; scheduleRender(); return; }
     if (event.kind === "queue") { S.queue = event.queue; if (S.view === "queue" && !document.querySelector(".q-add textarea:focus, .q-add input:focus")) renderMain(); renderSide(); return; }
@@ -1346,13 +1346,15 @@ function renderQueue(main) {
       h("button", { class: "icon mobile-only", type: "button", title: "New thread", "aria-label": "New thread", onclick: () => startNew() }, icon("compose", 17))),
     h("div", { class: "feed" }, h("div", { class: "inbox queue" },
       h("h1", {}, "Overnight queue"),
-      h("p", { class: "note" }, "B5 Code works through these on its own, one at a time, each on a branch of its own, on whichever account has room. Edits, tests, builds and git in the task's folder run without asking; anything else pauses the task for you and the queue moves on. Nothing is pushed or merged: in the morning, each task has a report, and its thread has Open PR."),
+      h("p", { class: "note" }, `B5 Code works through these on its own, one at a time, each on a branch of its own, on whichever account has room. Edits, tests, builds and git in the task's folder run without asking; ${S.settings?.queueCarryOn !== false ? "anything else is skipped, and the task carries on without it" : "anything else pauses the task for you and the queue moves on"}. Nothing is pushed or merged: in the morning, each task has a report, and its thread has Open PR.`),
       h("div", { class: "in-card q-run" },
         h("div", { class: "q-status" }, h("span", { class: "q-dot" + (q.on ? " on" : "") }), h("span", {}, status)),
         h("div", { class: "btns" },
           q.on ? h("button", { class: "btn", type: "button", onclick: () => queueCall("POST", "/api/queue", { on: false, startAt: null }) }, "Pause the queue")
             : h("button", { class: "btn primary", type: "button", disabled: !left, onclick: () => queueCall("POST", "/api/queue", { on: true, startAt: null }) }, "Start now"),
-          h("span", { class: "q-at" }, "or at", time, h("button", { class: "btn", type: "button", disabled: !left, onclick: startAt }, when ? "Change" : "Start then")))),
+          h("span", { class: "q-at" }, "or at", time, h("button", { class: "btn", type: "button", disabled: !left, onclick: startAt }, when ? "Change" : "Start then"))),
+        h("div", { class: "q-nowait", onchange: () => setTimeout(renderMain) }, serverToggle("queueCarryOn", "Don't wait for me",
+          "When a task wants to do something the overnight rules keep for you, or asks you a question, Claude skips it and carries on. Each task lists what it skipped. Off: the task waits for your answer."))),
       projects.length ? h("div", { class: "in-card q-add" },
         h("div", { class: "in-title" }, "Add a task"),
         h("div", { class: "q-row" }, sel), brief, checks,
@@ -1380,6 +1382,8 @@ function queueCard(t, i, count) {
     t.checks ? h("div", { class: "q-meta" }, icon("check", 12), `Checks: ${t.checks}${t.checkTries ? ` · tried ${t.checkTries}×` : ""}`) : null,
     t.branch ? h("div", { class: "q-meta" }, icon("branch", 12), t.branch) : null,
     t.why ? h("p", { class: "q-why" }, t.why) : null,
+    t.skipped?.length ? h("details", {}, h("summary", {}, `Skipped ${t.skipped.length} step${t.skipped.length === 1 ? "" : "s"} that needed you`),
+      h("ul", { class: "q-skipped" }, ...t.skipped.map((x) => h("li", {}, x)))) : null,
     r ? h("div", { class: "q-report" },
       h("div", { class: "q-meta" }, `${r.commits.length} commit${r.commits.length === 1 ? "" : "s"}${r.stat ? ` · ${r.stat.replace(/ files? changed/, (m) => m)}` : ""}${r.dirty ? ` · ${r.dirty} file${r.dirty === 1 ? "" : "s"} left uncommitted` : ""}`),
       r.reply ? h("details", {}, h("summary", {}, "Claude's report"), h("div", { class: "msg-ai q-reply", html: md(r.reply) })) : null) : null,

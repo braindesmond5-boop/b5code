@@ -21,7 +21,7 @@ import { LIVE_ONLY, limitResetAt } from "./events.js";
 import { listSessions, sessionFile, importSession } from "./transcripts.js";
 import { Awake } from "./awake.js";
 import { setLoginItem, plistPath, setLoginItemWindows, startupLink } from "./login.js";
-import { queueAllows, overnightBrief, queueBranch, nextTask, afterTurn, TASK_MINUTES, CHECK_MINUTES, STATUS_LABEL, queueSandboxSettings, checksSandboxProfile } from "./queue.js";
+import { queueAllows, skippedMessage, overnightBrief, queueBranch, nextTask, afterTurn, TASK_MINUTES, CHECK_MINUTES, STATUS_LABEL, queueSandboxSettings, checksSandboxProfile } from "./queue.js";
 import { findCli, parseStatus as parseTailscaleStatus, serveArgs, serving, adminLink, tailnetOrigins, TAILNET_PREVIEW_HTTPS } from "./tailscale.js";
 import { loadVapid, cleanSubscription, sendPush } from "./push.js";
 import { MAIN, allAccounts, accountEnv, accountDir, newAccountId, pickAccount, firstReset, isLimited, ensureLinks, removeAccountDir, loginUrl, syncUserConfig } from "./accounts.js";
@@ -228,6 +228,8 @@ async function loadAccount(acct = null) {
     accountInfo.set(a.id, { ...info, notLinked });
     if (a.id === MAIN) account = info.signedIn ? { email: info.email, plan: info.plan, org: info.org } : null;
   }
+  // A page that loaded while this was being asked (B5 Code just started) showed "Not signed in": it's told now.
+  broadcast(null, { kind: "accounts", accounts: accountsView(), account });
 }
 export function planName(type) {
   const t = String(type || "").toLowerCase();
@@ -1109,10 +1111,14 @@ function queueAnswered(threadId, session, ev) {
   const t = store.state.threads.find((x) => x.id === threadId);
   if (!task || !t?.dir || (task.status !== "running" && task.status !== "paused")) return false;
   const verdict = queueAllows(ev.tool, ev.input, t.dir);
-  if (verdict.ok) {
-    if (!session.answerPermission(ev.requestId, "allow")) return false;
-    // Kept as a step, so the morning's thread shows what ran on the owner's behalf.
-    const shown = { kind: "permission_answer", requestId: ev.requestId, choice: "allow", auto: true, summary: ev.summary };
+  // "Don't wait for me": what it may not do is skipped (never allowed), and the task carries on without it.
+  const skip = !verdict.ok && task.status === "running" && store.state.settings?.queueCarryOn !== false;
+  if (verdict.ok || skip) {
+    const choice = verdict.ok ? "allow" : "deny";
+    if (!session.answerPermission(ev.requestId, choice, skip ? { message: skippedMessage(ev.tool) } : {})) return false;
+    if (skip) updateTask(task.id, { skipped: [...(task.skipped || []), `Claude wanted to ${verdict.why}: ${ev.summary}`].slice(-20) });
+    // Kept as a step, so the morning's thread shows what ran (or was skipped) on the owner's behalf.
+    const shown = { kind: "permission_answer", requestId: ev.requestId, choice, auto: true, summary: ev.summary };
     store.appendLog(threadId, { ...ev, auto: true });
     store.appendLog(threadId, shown);
     broadcast(threadId, { ...ev, auto: true });

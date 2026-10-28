@@ -230,8 +230,9 @@ export class ClaudeSession extends EventEmitter {
   /**
    * `answers`: Claude's questions answered (web/questions.js), given to the tool with its input.
    * A question can't be allowed without them: it would reach Claude unanswered.
+   * `message`: what Claude is told on a "deny", in place of the usual.
    */
-  answerPermission(requestId, choice, { answers = null } = {}) {
+  answerPermission(requestId, choice, { answers = null, message = null } = {}) {
     if (!this.pending.has(requestId)) return false;
     const input = this.pending.get(requestId);
     // Claude's own question tool, not just any tool whose input has questions (a survey connector's, say).
@@ -240,7 +241,7 @@ export class ClaudeSession extends EventEmitter {
     this.pending.delete(requestId);
     this.pendingTools.delete(requestId);
     const response = choice === "deny"
-      ? { behavior: "deny", message: question ? "The user skipped the question. Ask in your reply instead, or carry on with your best judgement." : "The user said no." }
+      ? { behavior: "deny", message: message || (question ? "The user skipped the question. Ask in your reply instead, or carry on with your best judgement." : "The user said no.") }
       : {
         behavior: "allow",
         updatedInput: answers ? { ...input, answers } : input,

@@ -15,7 +15,7 @@ const TITLE_MAX = 60;
 export const emptyState = () => ({ projects: [], threads: [], settings: { ...SERVER_DEFAULTS } });
 // Settings the server acts on (the page's own look and feel stays in the browser).
 // extraAccounts: more than one Claude account (server/accounts.js), off until you turn it on.
-export const SERVER_DEFAULTS = { keepAwake: true, autoResume: true, autoSwitch: true, autoUpdate: true, chatWeb: true, studioAutostart: true, extraAccounts: false };
+export const SERVER_DEFAULTS = { keepAwake: true, autoResume: true, autoSwitch: true, autoUpdate: true, chatWeb: true, studioAutostart: true, extraAccounts: false, queueCarryOn: true };
 const newId = () => crypto.randomBytes(6).toString("hex");
 
 export function addProject(state, { name, dir, kind }) {

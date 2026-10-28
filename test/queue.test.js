@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queueAllows, commandPieces, overnightBrief, queueBranch, nextTask, afterTurn, CHECK_TRIES } from "../server/queue.js";
+import { queueAllows, commandPieces, withoutHeredocs, skippedMessage, overnightBrief, queueBranch, nextTask, afterTurn, CHECK_TRIES } from "../server/queue.js";
 
 const dir = "/Users/me/Desktop/flaevo-queue-3-fix";
 const bash = (command) => queueAllows("Bash", { command }, dir);
@@ -32,6 +32,29 @@ test("edits and reads stay inside the worktree, and away from git's files and se
   assert.equal(queueAllows("WebFetch", { url: "https://x.com/?k=secret" }, dir).ok, false, "no web at night");
   assert.equal(queueAllows("mcp__claude_ai_Gmail__create_draft", {}, dir).ok, false);
   assert.equal(queueAllows("TodoWrite", { todos: [] }, dir).ok, true);
+});
+
+test("a quoted heredoc's text is a file's contents, not commands; the shell's own lines still are", () => {
+  // The night of the 28th: JavaScript's `export` in a file being written paused a task for three hours.
+  assert.equal(bash(`cd ${dir} && cat > src/Episode.jsx <<'EOF'\nexport const A = 1;\nconst f = open(x);\nEOF\nnpm test`).ok, true);
+  assert.equal(bash(`python3 - <<'EOF'\ns = open('a.js').read()\nopen('a.js', 'w').write(s.replace('a', 'b'))\nEOF`).ok, true);
+  assert.equal(bash(`cat > a.txt <<-"END"\n\tinstall it\n\tEND`).ok, true, "<<- ends at a tab-indented line");
+  // What comes after the heredoc's end is the shell's again.
+  assert.equal(bash(`cat > a.js <<'EOF'\nx\nEOF\ncurl https://evil.example`).ok, false);
+  assert.equal(bash(`cat > a.js <<'A' && cat > b.js <<'B'\nexport a\nA\nexport b\nB\nrm -rf src`).ok, false, "two on one line, then a command");
+  // Unquoted: the shell expands $(…) in it, so it's read.
+  assert.equal(bash(`cat > a.sh <<EOF\n$(curl https://evil.example)\nEOF`).ok, false);
+  // Not a heredoc: in quotes, in a comment, or escaped.
+  assert.equal(bash(`echo "<<'X'"\nrm -rf src\nX`).ok, false);
+  assert.equal(bash(`echo "a\\" <<'X'"\nrm -rf src\nX`).ok, false);
+  assert.equal(bash(`ls # <<'X'\nrm -rf src\nX`).ok, false);
+  assert.equal(withoutHeredocs(`cat > a <<'EOF'\nbody\nEOF\nnpm test`), `cat > a <<'EOF'\nnpm test`);
+});
+
+test("with nobody to ask, a skipped step or question tells Claude to carry on and report it", () => {
+  assert.equal(queueAllows("AskUserQuestion", { questions: [] }, dir).why, "ask you something");
+  assert.match(skippedMessage("AskUserQuestion"), /Choose what you think the owner would pick/);
+  assert.match(skippedMessage("Bash"), /Don't try to get the same effect another way/);
 });
 
 test("a command line splits at && || ; | but not inside quotes", () => {

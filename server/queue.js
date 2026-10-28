@@ -7,13 +7,16 @@
 // Nothing risky runs unattended. Edits inside the task's worktree, reading,
 // and a short list of commands (tests, builds, git inside the worktree) are
 // allowed on the owner's behalf; anything else pauses the task with its
-// question in the inbox (and on the phone), and the queue moves on.
+// question in the inbox (and on the phone), and the queue moves on. Or, with
+// "Don't wait for me" on, that step is skipped and the task carries on
+// without it: never allowed, only left for the owner, in the report.
 // Nothing is ever pushed or merged: Open PR is the owner's, in the morning.
 //
 // The rules are pure and tested; server/index.js runs them.
 
 import fs from "node:fs";
 import path from "node:path";
+import { ASK_TOOL } from "../web/questions.js";
 
 export const TASK_MINUTES = 45; // a task running longer is stopped and called stuck
 export const CHECK_TRIES = 3; // the checks failing this many times: stuck
@@ -60,6 +63,42 @@ export function commandPieces(cmd) {
   return out.map((p) => p.trim()).filter(Boolean);
 }
 
+/** The quoted heredocs a line opens (<<'EOF', <<-"END"): their ends, in order. Not in quotes or a comment. */
+function heredocsOn(line) {
+  const out = [];
+  let q = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === "\\" && q !== "'") { i++; continue; }
+    if (q) { if (c === q) q = null; continue; }
+    if (c === "$" && line[i + 1] === "'") return []; // $'…' escapes its quotes: not read here, so nothing's taken out
+    if (c === "'" || c === '"') { q = c; continue; }
+    if (c === "#" && (i === 0 || /\s/.test(line[i - 1]))) break;
+    if (c === "<" && line[i + 1] === "<" && line[i + 2] !== "<") {
+      const m = /^<<(-?)\s*(['"])([\w.-]+)\2/.exec(line.slice(i));
+      if (m) { out.push({ tabs: m[1] === "-", end: m[3] }); i += m[0].length - 1; } else i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * A command line without its quoted heredocs' text (cat > a.js <<'EOF' … EOF): that's a file's
+ * contents, or a script for python3 or node, never read by the shell, so its words (`export`,
+ * `open(…)`) aren't commands. An unquoted heredoc's text is kept: the shell runs its $(…).
+ */
+export function withoutHeredocs(cmd) {
+  const lines = String(cmd || "").split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(lines[i]);
+    for (const { tabs, end } of heredocsOn(lines[i])) {
+      while (++i < lines.length && (tabs ? lines[i].replace(/^\t+/, "") : lines[i]) !== end);
+    }
+  }
+  return out.join("\n");
+}
+
 /** The real path of `p`, or of its nearest folder that exists (a file about to be made): symlinks followed. */
 function realish(p) {
   let cur = p, rest = [];
@@ -102,7 +141,7 @@ export function queueAllows(tool, input, dir) {
     return { ok: true };
   }
   if (tool === "Bash") {
-    const cmd = String(i.command || "");
+    const cmd = withoutHeredocs(i.command);
     // Words inside quotes (a commit message) aren't commands; $( and ` run one even inside "…".
     const bare = cmd.replace(/'[^']*'|"[^"]*"/g, "''");
     // A command built at run time ($(…) or `…` outside quotes) could be anything: asked. Inside "…" it's
@@ -132,7 +171,18 @@ export function queueAllows(tool, input, dir) {
     for (const p of pieces) if (/^cd\b/.test(p) && !inside(dir, p.replace(/^cd\s*/, "").replace(/^["']|["']$/g, "") || ".")) return { ok: false, why: "leave its worktree" };
     return { ok: true };
   }
+  if (tool === ASK_TOOL) return { ok: false, why: "ask you something" };
   return { ok: false, why: `use ${String(tool || "a tool").replace(/^mcp__[^_]+__/, "")}` };
+}
+
+/**
+ * What Claude is told when a step the overnight list doesn't allow is skipped instead of waiting
+ * for the owner (the queue's "Don't wait for me"): carry on without it, and say so in the report.
+ */
+export function skippedMessage(tool) {
+  return tool === ASK_TOOL
+    ? "Nobody is around to answer until the morning. Choose what you think the owner would pick, carry on, and say in your report what you chose and why."
+    : "B5 Code's overnight rules hold this step for the owner, and nobody is around to approve it, so it was skipped. Don't try to get the same effect another way. Carry on with the rest of the task without it, and list it in your report as left for the owner.";
 }
 
 // ── The brief ───────────────────────────────────────────────────────────────
