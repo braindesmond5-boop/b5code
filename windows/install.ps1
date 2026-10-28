@@ -1,6 +1,9 @@
 # B5 Code for Windows, installed with one line in PowerShell:
 #
-#   irm https://raw.githubusercontent.com/braindesmond5-boop/b5code/main/windows/install.ps1 | iex
+#   irm braindesmond5-boop.github.io/b5 | iex
+#
+# (That short address, a GitHub Pages site, runs this file:
+#  irm https://raw.githubusercontent.com/braindesmond5-boop/b5code/main/windows/install.ps1 | iex)
 #
 # It needs Git, Node.js 20 or newer and Claude Code, and offers to install whichever is missing
 # (Git and Node with winget, Claude Code with Anthropic's own installer). Then it downloads B5 Code

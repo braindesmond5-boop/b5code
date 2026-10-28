@@ -11,8 +11,10 @@ B5 Code is open source under the MIT license, but it isn't taking contributions:
 Open **PowerShell** and paste:
 
 ```powershell
-irm https://raw.githubusercontent.com/braindesmond5-boop/b5code/main/windows/install.ps1 | iex
+irm braindesmond5-boop.github.io/b5 | iex
 ```
+
+(That short address runs [`windows/install.ps1`](windows/install.ps1); the long way is `irm https://raw.githubusercontent.com/braindesmond5-boop/b5code/main/windows/install.ps1 | iex`.)
 
 It checks for Git, Node.js 20+ and Claude Code and offers to install whichever is missing, downloads B5 Code into `%LOCALAPPDATA%\Programs\B5 Code`, builds its app on your PC, and puts **B5 Code** in the Start menu and on the Desktop. B5 Code then updates itself from this repo's `main` while nothing is running (Settings › Update by itself); `b5 update` does it now. Running the line again repairs an install.
 

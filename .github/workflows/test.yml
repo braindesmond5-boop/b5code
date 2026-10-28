@@ -27,6 +27,23 @@ jobs:
         run: node windows/build.mjs
       - name: Start B5 Code and use it
         run: node .github/windows-smoke.mjs
+      # The install line people type: the short address answers with text, and the installer it runs
+      # parses, in Windows PowerShell 5.1 (every PC has it) and PowerShell 7. Nothing is run.
+      - name: The install line works (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $line = irm braindesmond5-boop.github.io/b5
+          if ($line -isnot [string] -or $line -notmatch 'windows/install\.ps1') { throw "The short address didn't answer with the install line: $line" }
+          $null = [scriptblock]::Create($line)
+          $null = [scriptblock]::Create((irm https://raw.githubusercontent.com/braindesmond5-boop/b5code/main/windows/install.ps1))
+          $null = [scriptblock]::Create((Get-Content -Raw windows/install.ps1))
+          Write-Output "The install line and the installer parse."
+      - name: The install line works (PowerShell 7)
+        shell: pwsh
+        run: |
+          $line = irm braindesmond5-boop.github.io/b5
+          if ($line -notmatch 'windows/install\.ps1') { throw "The short address didn't answer with the install line: $line" }
+          $null = [scriptblock]::Create((Get-Content -Raw windows/install.ps1))
       - name: Keep the picture of the app
         if: always()
         uses: actions/upload-artifact@v4
