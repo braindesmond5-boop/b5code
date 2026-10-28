@@ -2377,12 +2377,13 @@ function togglePlusMenu() {
   const menu = $("plus-menu");
   if (!menu.hidden) { menu.hidden = true; return; }
   const item = (ic, name, desc, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { menu.hidden = true; fn(); } },
-    h("span", { class: "tick" }, icon(ic, 15)), h("span", {}, h("div", { class: "m-name" }, name), h("div", { class: "m-desc" }, desc)));
+    h("span", { class: "tick" }, typeof ic === "string" ? icon(ic, 15) : ic), h("span", {}, h("div", { class: "m-name" }, name), h("div", { class: "m-desc" }, desc)));
   fill(menu, 
     item("paperclip", "Add photos & files", "Screenshots go in as images Claude can see", () => $("file-input").click()),
     item("slash", "Skills and commands", "Run a skill, like /flaevo-plan", openSlash),
     item("eye", "Open a file in Preview", "A plan page, screenshot, PDF or video", pickPreviewFile),
-    // On a phone the row is full: the checkpoints list is here instead of a chip.
+    // On a phone the row is full: effort and the checkpoints list are here instead of chips.
+    narrow() ? item(effortBars(currentEffort()), `Effort: ${effortOf(currentEffort())?.name || "Default"}`, "How hard Claude thinks", toggleEffortMenu) : null,
     narrow() && thread() && cpEntries(thread()).length ? item("clock", "Checkpoints", "Go back to how the files were earlier", toggleCpMenu) : null);
   menu.hidden = false;
   const close = (e) => { if (!menu.contains(e.target) && !$("plus").contains(e.target)) { menu.hidden = true; document.removeEventListener("mousedown", close); } };

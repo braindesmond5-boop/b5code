@@ -911,10 +911,11 @@ body.native .acct-side { border-top-color: rgba(0, 0, 0, 0.06); }
   .composer .tools { gap: 6px; min-width: 0; flex-wrap: nowrap; }
   .composer .tools .chip { height: 34px; padding: 0 10px; border-radius: 17px; border: 1px solid var(--border); font-size: 13.5px; min-width: 0; flex: 0 1 auto; }
   .composer .tools .chip.static { border-color: transparent; padding: 0 4px; }
-  #model-chip { flex: 0 0 auto !important; }
+  /* The model and project names give way (with an ellipsis) before Send is pushed out of the box. */
+  #model-chip { flex: 0 1 auto !important; min-width: 68px; }
   .composer .tools .chip span { min-width: 0; }
   .composer .tools .chip svg { flex: none; }
-  #where-chip { min-width: 58px; }
+  #where-chip { min-width: 44px; flex-shrink: 4; }
   .composer .tools .chip.skills { display: none; }
   .composer .tools .spacer { flex: 1 1 0; min-width: 0; }
   .composer .tools .icon.plus, .composer .tools .mic, .composer .send { width: 38px; height: 38px; flex: none; }
@@ -1256,10 +1257,8 @@ button.link:hover { text-decoration: underline; }
 .cp-line .cp-rw { height: auto; min-height: 24px; padding: 3px 10px; line-height: 1.35; text-align: left; border-radius: 12px; }
 .chip .bars { flex: none; }
 @media (max-width: 760px) {
-  .composer .tools #effort-chip .effort-name, .composer .tools #cp-chip .cp-word { display: none; }
-  .composer .tools #effort-chip { padding: 0 10px; flex: 0 0 auto; }
-  .composer .tools #cp-chip { display: none; }
-  #where-chip { min-width: 40px; }
+  /* The row is the one it was: effort and checkpoints are in the + menu. */
+  .composer .tools #effort-chip, .composer .tools #cp-chip { display: none; }
   .cp-line.rewound::before, .cp-line.rewound::after { display: none; }
   .cp-line.rewound { justify-content: center; }
 }
