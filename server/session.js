@@ -78,7 +78,7 @@ export class ClaudeSession extends EventEmitter {
     if (this.model) args.push("--model", this.model);
     if (this.effort) args.push("--effort", this.effort);
     this.emit("event", { kind: "phase", phase: "starting" });
-    const proc = spawn(this.command, args, { cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: this.env });
+    const proc = spawn(this.command, args, { windowsHide: true, cwd: this.cwd, stdio: ["pipe", "pipe", "pipe"], env: this.env });
     this.proc = proc;
 
     readline.createInterface({ input: proc.stdout }).on("line", (line) => this.#onLine(line));

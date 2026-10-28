@@ -24,7 +24,7 @@ export function inside(root, rel = "") {
 
 function git(args, cwd, input) {
   return new Promise((resolve) => {
-    const p = execFile("git", args, { cwd, maxBuffer: 16 << 20, timeout: 10000 }, (err, out) => resolve(err && !out ? null : out));
+    const p = execFile("git", args, { windowsHide: true, cwd, maxBuffer: 16 << 20, timeout: 10000 }, (err, out) => resolve(err && !out ? null : out));
     if (input != null) { p.stdin.on("error", () => {}); p.stdin.end(input); }
   });
 }

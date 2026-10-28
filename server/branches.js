@@ -72,7 +72,7 @@ export function openPrPrompt({ branch, template }) {
 
 function run(cmd, args, cwd, timeout = 60000) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, timeout, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { windowsHide: true, cwd, timeout, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
       if (err) reject(Object.assign(new Error((stderr || stdout || err.message).trim().split("\n").slice(-3).join(" ")), { code: err.code }));
       else resolve(stdout.trim());
     });

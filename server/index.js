@@ -201,7 +201,7 @@ const usable = (id) => signedIn(id) && !fullUntil(id);
 
 function authStatus(acct) {
   return new Promise((resolve) => {
-    execFile(claude()[0], [...claude()[1], "auth", "status"], { timeout: 15000, env: accountEnv(process.env, acct) }, (err, out) => {
+    execFile(claude()[0], [...claude()[1], "auth", "status"], { windowsHide: true, timeout: 15000, env: accountEnv(process.env, acct) }, (err, out) => {
       if (err && !out) return resolve(null);
       try {
         const a = JSON.parse(out);
@@ -248,7 +248,7 @@ function refreshUsage() {
   for (const a of allAccounts(store.state)) {
     if (usageRunning.has(a.id) || !signedIn(a.id)) continue;
     usageRunning.add(a.id);
-    execFile(claude()[0], [...claude()[1], "-p", "/usage", "--output-format", "json"], { cwd: HOME, timeout: 90000, maxBuffer: 8 << 20, env: accountEnv(process.env, a) }, (err, out, errOut) => {
+    execFile(claude()[0], [...claude()[1], "-p", "/usage", "--output-format", "json"], { windowsHide: true, cwd: HOME, timeout: 90000, maxBuffer: 8 << 20, env: accountEnv(process.env, a) }, (err, out, errOut) => {
       usageRunning.delete(a.id);
       // Said in the log: a meter that silently stops updating looks like a wrong one.
       const fail = (why) => console.error(`Usage (${a.id}): ${why}`);
@@ -276,7 +276,7 @@ setInterval(() => {
 
 function gitBranch(dir) {
   return new Promise((resolve) => {
-    execFile("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 3000 }, (err, out) => resolve(err ? "" : out.trim()));
+    execFile("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { windowsHide: true, timeout: 3000 }, (err, out) => resolve(err ? "" : out.trim()));
   });
 }
 
@@ -706,7 +706,7 @@ function startLogin(name, email, { main = false } = {}) {
   const acct = { id, dir };
   // BROWSER: don't open it ourselves; the page offers the link, since the browser may be signed in to the other account.
   // (A Mac's /usr/bin/true: Windows has none, so there Claude Code may open the browser as well.)
-  const proc = spawn(claude()[0], [...claude()[1], "auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], { env: { ...accountEnv(process.env, acct), ...(IS_WIN ? {} : { BROWSER: "/usr/bin/true" }) }, stdio: ["pipe", "pipe", "pipe"] });
+  const proc = spawn(claude()[0], [...claude()[1], "auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], { windowsHide: true, env: { ...accountEnv(process.env, acct), ...(IS_WIN ? {} : { BROWSER: "/usr/bin/true" }) }, stdio: ["pipe", "pipe", "pipe"] });
   const l = { id, name, dir, main, proc, out: "", state: "waiting", message: "", timer: null };
   const take = (d) => { l.out = (l.out + d).slice(-20000); };
   proc.stdout.on("data", take);
@@ -769,7 +769,7 @@ function endLogin(l, discard) {
 }
 
 function logout(acct) {
-  return new Promise((resolve) => execFile(claude()[0], [...claude()[1], "auth", "logout"], { timeout: 20000, env: accountEnv(process.env, acct) }, () => resolve()));
+  return new Promise((resolve) => execFile(claude()[0], [...claude()[1], "auth", "logout"], { windowsHide: true, timeout: 20000, env: accountEnv(process.env, acct) }, () => resolve()));
 }
 
 /** Sign an extra account out and remove its folder (never the shared things it links to). Its threads move to the main account. */
@@ -1155,7 +1155,7 @@ function runChecks(cmd, dir) {
 }
 
 function git(args, dir) {
-  return new Promise((resolve) => execFile("git", ["-C", dir, ...args], { timeout: 20000, maxBuffer: 4 << 20 }, (err, out) => resolve(err ? "" : out.trim())));
+  return new Promise((resolve) => execFile("git", ["-C", dir, ...args], { windowsHide: true, timeout: 20000, maxBuffer: 4 << 20 }, (err, out) => resolve(err ? "" : out.trim())));
 }
 
 const prCache = new Map(); // dir \0 branch -> { pr, at }: gh takes a second or two, asked again after a minute
@@ -1233,8 +1233,8 @@ async function throwAway(t) {
   if (sides.some((x) => sessions.get(x.id)?.session.busy)) throw Object.assign(new Error("A side chat of this task is working. Stop it first."), { status: 409 });
   for (const x of [t, ...sides]) { closeSession(x.id); terminals.close(x.id); if (x !== t) store.deleteLog(x.id); }
   if (project && t.root && t.branch?.startsWith("queue/")) {
-    await new Promise((resolve) => execFile("git", ["-C", project.dir, "worktree", "remove", "--force", t.root], { timeout: 60000 }, () => resolve()));
-    await new Promise((resolve) => execFile("git", ["-C", project.dir, "branch", "-D", t.branch], { timeout: 20000 }, () => resolve()));
+    await new Promise((resolve) => execFile("git", ["-C", project.dir, "worktree", "remove", "--force", t.root], { windowsHide: true, timeout: 60000 }, () => resolve()));
+    await new Promise((resolve) => execFile("git", ["-C", project.dir, "branch", "-D", t.branch], { windowsHide: true, timeout: 20000 }, () => resolve()));
   }
   dropCheckpoints(t);
   store.save(removeThread(store.state, t.id));
@@ -1557,7 +1557,7 @@ function serveStatic(req, res, urlPath, previewOrigin = `${PREVIEW_ORIGIN} http:
  * Claude has already committed still shows. The commits since the base come too.
  */
 async function gitChanges(dir, base, scope, startedAt = 0) {
-  const run = (args) => new Promise((resolve) => execFile("git", ["-C", dir, ...args], { maxBuffer: 4 << 20 }, (err, out) => resolve(err ? null : out)));
+  const run = (args) => new Promise((resolve) => execFile("git", ["-C", dir, ...args], { windowsHide: true, maxBuffer: 4 << 20 }, (err, out) => resolve(err ? null : out)));
   const status = await run(["status", "--porcelain=v1", "-z", "-uall"]);
   if (status === null) return { git: false, files: [], commits: [] };
   const all = base ? parseLog(await run(["log", "--format=%h%x1f%s%x1f%ct", "-z", "-n", "50", `${base}..HEAD`])) : [];
@@ -1649,7 +1649,7 @@ function busyTerminals() {
 /** Whether the new code would start at all: a restart into a syntax error would leave no B5 Code. */
 async function codeStarts() {
   const files = fs.readdirSync(path.join(ROOT, "server")).filter((f) => f.endsWith(".js"));
-  const ok = await Promise.all(files.map((f) => new Promise((resolve) => execFile(process.execPath, ["--check", path.join(ROOT, "server", f)], { timeout: 15000 }, (err) => resolve(!err)))));
+  const ok = await Promise.all(files.map((f) => new Promise((resolve) => execFile(process.execPath, ["--check", path.join(ROOT, "server", f)], { windowsHide: true, timeout: 15000 }, (err) => resolve(!err)))));
   return ok.every(Boolean);
 }
 
@@ -1758,13 +1758,13 @@ function newFileLines(file) {
 
 function gitDiff(dir, file, since = "HEAD") {
   return new Promise((resolve) => {
-    execFile("git", ["-C", dir, "diff", since, "--", file], { maxBuffer: 4 << 20 }, (err, out) => {
+    execFile("git", ["-C", dir, "diff", since, "--", file], { windowsHide: true, maxBuffer: 4 << 20 }, (err, out) => {
       if (!err && out) return resolve(out.slice(0, 200000));
       // Untracked, as git itself says (so the path can't reach outside the repo): `--no-index` exits 1
       // when the files differ, which they always do here.
-      execFile("git", ["-C", dir, "ls-files", "--others", "--exclude-standard", "-z", "--", file], { maxBuffer: 1 << 20 }, (err2, listed) => {
+      execFile("git", ["-C", dir, "ls-files", "--others", "--exclude-standard", "-z", "--", file], { windowsHide: true, maxBuffer: 1 << 20 }, (err2, listed) => {
         if (err2 || !String(listed).split("\0").includes(file)) return resolve("");
-        execFile("git", ["-C", dir, "diff", "--no-index", "--", "/dev/null", file], { maxBuffer: 4 << 20 }, (_err3, out2) => {
+        execFile("git", ["-C", dir, "diff", "--no-index", "--", "/dev/null", file], { windowsHide: true, maxBuffer: 4 << 20 }, (_err3, out2) => {
           resolve(String(out2 || "").slice(0, 200000));
         });
       });
@@ -1774,7 +1774,7 @@ function gitDiff(dir, file, since = "HEAD") {
 
 /** Several files' diffs at once: one git diff for the tracked ones, then the new (untracked) ones each. */
 async function gitDiffs(dir, files, since = "HEAD") {
-  const run = (args) => new Promise((resolve) => execFile("git", ["-C", dir, ...args], { maxBuffer: 16 << 20 }, (_err, out) => resolve(String(out || ""))));
+  const run = (args) => new Promise((resolve) => execFile("git", ["-C", dir, ...args], { windowsHide: true, maxBuffer: 16 << 20 }, (_err, out) => resolve(String(out || ""))));
   const tracked = files.filter((f) => f.status !== "??").map((f) => f.file);
   const diffs = tracked.length ? splitDiff(await run(["-c", "core.quotePath=false", "diff", since, "--", ...tracked])) : {};
   for (const f of files) if (f.status === "??") diffs[f.file] = await gitDiff(dir, f.file, since);
@@ -2823,7 +2823,7 @@ function tsRun(args, timeout = 20000) {
   return new Promise((resolve) => {
     const cli = findCli();
     if (!cli) return resolve({ ok: false, out: `Tailscale isn't installed on this ${MAC}.` });
-    execFile(cli, args, { timeout, maxBuffer: 1 << 20 }, (err, out, errOut) => resolve({ ok: !err, out: `${out || ""}${errOut || ""}` }));
+    execFile(cli, args, { windowsHide: true, timeout, maxBuffer: 1 << 20 }, (err, out, errOut) => resolve({ ok: !err, out: `${out || ""}${errOut || ""}` }));
   });
 }
 
