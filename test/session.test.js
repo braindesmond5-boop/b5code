@@ -173,11 +173,14 @@ test("a question is answered by allowing it with the answers; never allowed with
   const sent = [];
   s.proc = { stdin: { write: (l) => sent.push(JSON.parse(l)) } };
   const input = { questions: [{ question: "Which?", header: "H", options: [{ label: "A" }] }] };
-  s.pending.set("r1", input);
+  s.pending.set("r1", input); s.pendingTools.set("r1", "AskUserQuestion");
   assert.equal(s.answerPermission("r1", "allow"), false, "no answers: refused, still waiting");
   assert.equal(s.answerPermission("r1", "allow", { answers: { "Which?": "A" } }), true);
   assert.deepEqual(sent[0].response.response, { behavior: "allow", updatedInput: { ...input, answers: { "Which?": "A" } } });
-  s.pending.set("r2", input);
+  s.pending.set("r2", input); s.pendingTools.set("r2", "AskUserQuestion");
+  s.pending.set("r3", input); s.pendingTools.set("r3", "mcp__survey__send");
+  assert.equal(s.answerPermission("r3", "allow"), true, "another tool with questions in its input is allowed as any tool");
   assert.equal(s.answerPermission("r2", "deny"), true, "skipping is a no");
-  assert.match(sent[1].response.response.message, /skipped the question/);
+  assert.deepEqual(sent[1].response.response, { behavior: "allow", updatedInput: input });
+  assert.match(sent[2].response.response.message, /skipped the question/);
 });

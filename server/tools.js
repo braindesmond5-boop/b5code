@@ -1,7 +1,7 @@
 // One short line per tool call, in plain words: "Read courses.js" rather than
 // a JSON blob. Pure, and the only place that knows how each tool is worded.
 
-const base = (p) => String(p || "").split(/[\\/]/).filter(Boolean).pop() || String(p || "");
+import { baseName as base } from "../web/paths.js";
 const clip = (s, n = 70) => {
   const t = String(s || "").replace(/\s+/g, " ").trim();
   return t.length > n ? t.slice(0, n - 1) + "…" : t;

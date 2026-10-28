@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import { normalize } from "./events.js";
 import { claude } from "./platform.js";
+import { ASK_TOOL } from "../web/questions.js";
 
 const SETTLE_MS = 20000; // compaction or a hook can hold a queued message that long
 
@@ -44,6 +45,7 @@ export class ClaudeSession extends EventEmitter {
     this.proc = null;
     this.busy = false;
     this.pending = new Map(); // requestId -> the tool input it asked about
+    this.pendingTools = new Map(); // requestId -> the tool's name
     this.queued = []; // { uuid, steer } sent and not yet taken in, oldest first (steer: sent mid-turn)
     this.held = null; // a turn's end that came while a message was still queued
     this.stopping = false; // Stop was pressed: queued messages are dropped, not run
@@ -99,6 +101,7 @@ export class ClaudeSession extends EventEmitter {
       }
       for (const id of this.pending.keys()) this.emit("event", { kind: "permission_closed", requestId: id });
       this.pending.clear();
+      this.pendingTools.clear();
       this.emit("exit", code);
     };
     // A process that never started (no `claude` on the PATH) reports only
@@ -121,6 +124,7 @@ export class ClaudeSession extends EventEmitter {
     if (raw.type === "system" && raw.subtype === "init" && raw.session_id) { this.sessionId = raw.session_id; this.forkFrom = null; }
     if (raw.type === "control_request" && raw.request?.subtype === "can_use_tool") {
       this.pending.set(raw.request_id, raw.request.input);
+      this.pendingTools.set(raw.request_id, raw.request.tool_name);
     }
     for (const ev of normalize(raw)) {
       if (ev.kind === "replay") { this.#taken(ev.uuid); continue; }
@@ -230,9 +234,11 @@ export class ClaudeSession extends EventEmitter {
   answerPermission(requestId, choice, { answers = null } = {}) {
     if (!this.pending.has(requestId)) return false;
     const input = this.pending.get(requestId);
-    const question = Array.isArray(input?.questions);
+    // Claude's own question tool, not just any tool whose input has questions (a survey connector's, say).
+    const question = this.pendingTools.get(requestId) === ASK_TOOL && Array.isArray(input?.questions);
     if (question && choice !== "deny" && !answers) return false;
     this.pending.delete(requestId);
+    this.pendingTools.delete(requestId);
     const response = choice === "deny"
       ? { behavior: "deny", message: question ? "The user skipped the question. Ask in your reply instead, or carry on with your best judgement." : "The user said no." }
       : {

@@ -28,15 +28,28 @@ async function running() {
 }
 
 // One starter at a time: the app and a terminal `b5` can start together, and an update holds it
-// throughout, so the app can't start the old server in the middle of one. A lock left by a starter
-// that was killed (or a PC that lost power) is cleared after five minutes.
+// throughout (npm, a build: minutes), so the app can't start the old server in the middle of one.
+// The lock names its holder: one whose holder is gone (killed, or a PC that lost power) is cleared,
+// and so is one held past half an hour, but never one a live update still holds.
 const LOCK = path.join(DATA, ".starting");
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+function lockHolder() {
+  try { return { pid: Number(fs.readFileSync(path.join(LOCK, "pid"), "utf8")), at: fs.statSync(LOCK).mtimeMs }; } catch { return null; }
+}
 function takeLock() {
   fs.mkdirSync(DATA, { recursive: true });
-  try { if (Date.now() - fs.statSync(LOCK).mtimeMs > 5 * 60000) fs.rmSync(LOCK, { recursive: true, force: true }); } catch { /* none */ }
-  try { fs.mkdirSync(LOCK); return true; } catch { return false; }
+  if (fs.existsSync(LOCK)) {
+    const h = lockHolder();
+    // A lock just made may not have its pid yet: only one older than a few seconds without one is stale.
+    const stale = h ? !alive(h.pid) || Date.now() - h.at > 30 * 60000 : Date.now() - (fs.statSync(LOCK, { throwIfNoEntry: false })?.mtimeMs || 0) > 10000;
+    if (stale) fs.rmSync(LOCK, { recursive: true, force: true });
+  }
+  try { fs.mkdirSync(LOCK); } catch { return false; }
+  fs.writeFileSync(path.join(LOCK, "pid"), String(process.pid));
+  return true;
 }
-const dropLock = () => fs.rmSync(LOCK, { recursive: true, force: true });
+/** Only ever our own lock. */
+const dropLock = () => { if (lockHolder()?.pid === process.pid) fs.rmSync(LOCK, { recursive: true, force: true }); };
 
 async function start({ locked = false } = {}) {
   if (await running()) return true;
@@ -96,7 +109,9 @@ async function update({ quiet = false } = {}) {
   try {
     await stop();
     git("merge", "--ff-only", "--quiet", "origin/main");
-    if (changed.some((f) => /^package(-lock)?\.json$/.test(f))) npm("install", "--no-audit", "--no-fund");
+    // npm ci: exactly the lockfile, which it never rewrites (npm install would, and the folder would
+    // then have changes of its own, which stops every update after).
+    if (changed.some((f) => /^package(-lock)?\.json$/.test(f))) npm("ci", "--no-audit", "--no-fund");
     await buildIfNeeded();
   } finally {
     if (wasRunning) await start({ locked: true });
@@ -109,7 +124,7 @@ async function update({ quiet = false } = {}) {
 /** What the installer runs once B5 Code's folder is there. */
 async function setup() {
   if (!WIN) throw new Error("`b5 setup` sets up B5 Code on Windows. On a Mac, build the app with mac/build.sh.");
-  if (!fs.existsSync(path.join(ROOT, "node_modules", "node-pty"))) npm("install", "--no-audit", "--no-fund");
+  if (!fs.existsSync(path.join(ROOT, "node_modules", "node-pty"))) npm("ci", "--no-audit", "--no-fund");
   await buildIfNeeded(true);
   const { menuLink, desktopLink, shortcutScript, powershellArgs } = await import("../server/login.js");
   for (const link of [menuLink(), desktopLink()]) {

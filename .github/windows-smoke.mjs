@@ -61,6 +61,17 @@ assert.match((await api("GET", `/api/files/read?project=${project.id}&path=${enc
 await assert.rejects(api("GET", `/api/files/read?project=${project.id}&path=${encodeURIComponent("..\\..\\x")}`));
 await assert.rejects(api("GET", `/api/files/read?project=${project.id}&path=${encodeURIComponent("C:\\Windows\\win.ini")}`));
 
+step("a command running in the Terminal stops a restart (Windows names only the shell)");
+await api("POST", `/api/terminals/${project.id}`, { cols: 100, rows: 30 });
+await new Promise((r) => setTimeout(r, 3000));
+await api("POST", `/api/terminals/${project.id}/input`, { data: "ping -n 120 127.0.0.1\r" });
+await new Promise((r) => setTimeout(r, 4000));
+res = await fetch(URL + "/api/restart", { method: "POST", headers: { "x-desk-token": token, "content-type": "application/json" }, body: "{}" });
+const refused = await res.json();
+assert.equal(res.status, 409, `restart wasn't refused: ${JSON.stringify(refused)}`);
+assert.ok(refused.busy.includes("a command in the Terminal"), JSON.stringify(refused));
+await api("POST", `/api/terminals/${project.id}/stop`);
+
 step("the folder browser starts at home");
 const folders = await api("GET", "/api/folders?path=~");
 assert.equal(folders.parent, null);

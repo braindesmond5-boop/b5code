@@ -19,6 +19,7 @@ import { GUIDE as MAC_GUIDE, SHORTCUTS as MAC_SHORTCUTS, searchGuide, forWindows
 import { needsReview, toolParts, reviewFields } from "./review.js";
 import { rankItems } from "./palette.js";
 import { questionsOf, answersFrom } from "./questions.js";
+import { baseName } from "./paths.js";
 import { highlight } from "./highlight.js";
 import { SCREENS, screenById, fitScreen } from "./screens.js";
 
@@ -35,6 +36,15 @@ const guideFor = () => (WIN() ? WIN_GUIDE : { guide: MAC_GUIDE, shortcuts: MAC_S
 if (macApp) document.body.classList.add("native");
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * An element's children replaced, with nothing drawn for null or false (as h() does): the
+ * browser's own replaceChildren writes a null as the word "null".
+ */
+function fill(el, ...kids) {
+  el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
+  return el;
+}
 
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
@@ -101,8 +111,6 @@ const KEY = () => (WIN() ? "Ctrl+" : "⌘");
 const FINDER = () => (WIN() ? "File Explorer" : "Finder");
 /** Whether a path is absolute, or in your home folder (~/…): /x, ~/x, C:\x, \\server\x. */
 const isAbsPath = (p) => /^(\/|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(String(p || ""));
-/** The last part of a path, either slash. */
-const baseName = (p) => String(p || "").split(/[\\/]/).filter(Boolean).pop() || "";
 /** The part of `p` inside your home folder ("" for the folder itself), or null; on Windows either slash and any case. */
 function underHome(p) {
   const s = String(p || ""), hm = S.home;
@@ -717,7 +725,7 @@ function renderSide() {
   const phone = phoneWidth();
   const spaceTabs = h("div", { class: "spaces" + (phone ? " tabbar" : ""), role: "tablist", "aria-label": "Spaces" }, ...SPACES.map(([id, label, ic]) =>
     h("button", { type: "button", role: "tab", "aria-selected": String(space === id), class: space === id ? "on" : "", title: label, "aria-label": label, onclick: () => setSpace(id) }, icon(ic, phone ? 20 : 14), h("span", { class: "space-label" }, label))));
-  $("side").replaceChildren(...[
+  fill($("side"), ...[
     phone
       // On a phone: the space's name, large, with Search, New and you; the spaces are a tab bar below.
       ? h("div", { class: "side-top phone-top" },
@@ -806,7 +814,7 @@ function accountCards() {
   return h("div", { class: "acct-side" },
     h("div", { class: "acct-head" },
       h("span", {}, "Accounts"),
-      h("button", { class: "icon", type: "button", title: `Settings (${KEY()},)`, "aria-label": "Settings", onclick: openSettings }, icon("settings", 15))),
+      h("button", { class: "icon", type: "button", title: `Settings (${KEY()},)`, "aria-label": "Settings", onclick: () => openSettings() }, icon("settings", 15))), // not the click: it'd be taken for a page
     ...list.map((acct, i) => {
       const st = accountState(acct);
       const ws = usageWindows(acct.id === "main" ? { planUsage: S.planUsage, usage: S.usage } : { planUsage: acct.planUsage, usage: acct.usage })
@@ -955,7 +963,7 @@ function renderMainInner(main) {
   if (S.view === "studio") { renderStudio(main); return; } // needs no project
   if (!S.projects.length) {
     view = null;
-    main.replaceChildren(h("div"), h("div", { class: "center" }, h("div", { class: "hello" },
+    fill(main, h("div"), h("div", { class: "center" }, h("div", { class: "hello" },
       h("h1", {}, "Welcome to B5 Code"),
       h("p", {}, "Add a project folder to start. Claude works inside it, with its CLAUDE.md, skills and memory."),
       h("button", { class: "btn primary", type: "button", onclick: addProjectDialog }, "Add a project folder"))));
@@ -966,7 +974,7 @@ function renderMainInner(main) {
   if (S.view === "github") { renderGithub(main); return; }
   if (S.view === "guide") { renderGuide(main); return; }
   const v = threadView();
-  if (v.nodes[0].parentNode !== main) main.replaceChildren(...v.nodes);
+  if (v.nodes[0].parentNode !== main) fill(main, ...v.nodes);
   const t = thread();
   const p = project();
   const feed = t ? feedOf(t.id) : emptyFeed();
@@ -977,7 +985,7 @@ function renderMainInner(main) {
   if (parent) { v.back.querySelector("span:last-child").textContent = parent.title; v.back.title = `Back to ${parent.title}`; }
   v.sideBtn.hidden = !t || !!t.sideOf;
   const branch = t?.branch || p?.branch;
-  v.where.replaceChildren(p ? p.name : "", branch ? h("span", { style: "display:inline-flex;align-items:center;gap:3px;color:var(--faint)" }, icon("branch", 12), branch) : "");
+  fill(v.where, p ? p.name : "", branch ? h("span", { style: "display:inline-flex;align-items:center;gap:3px;color:var(--faint)" }, icon("branch", 12), branch) : "");
   renderPrBox(v.prBox, t);
   v.paneBtn.classList.toggle("on", S.pane);
 
@@ -990,13 +998,13 @@ function renderMainInner(main) {
   const empty = !feed.items.length;
   v.hello.hidden = !empty;
   if (empty) {
-    if (parent) v.hello.replaceChildren(
+    if (parent) fill(v.hello, 
       h("h1", {}, "Side chat"),
       h("p", {}, parent.sessionId ? `Ask anything about “${parent.title}”. This chat starts from a copy of that conversation, so it knows everything so far, and the thread carries on working while you talk here.`
         : `Ask anything about “${parent.title}”. That thread hasn't started yet, so this chat starts fresh in the same folder.`));
-    else if (p?.kind === "work") v.hello.replaceChildren(...workHello(p).filter(Boolean)); // a null would show as "null"
-    else if (p?.kind === "chat") v.hello.replaceChildren(...chatHello());
-    else v.hello.replaceChildren(
+    else if (p?.kind === "work") fill(v.hello, ...workHello(p).filter(Boolean)); // a null would show as "null"
+    else if (p?.kind === "chat") fill(v.hello, ...chatHello());
+    else fill(v.hello, 
       h("h1", {}, p ? `What are we working on in ${p.name}?` : "What are we working on?"),
       h("p", {}, !p ? "" : t?.branch ? `Claude works in ${home(t.dir)}, on its own branch ${t.branch}. Type / for skills and commands.`
         : !t && S.newBranch ? `Claude will work on a new branch, ${newBranchName()}, in its own worktree. Type / for skills and commands.`
@@ -1036,8 +1044,8 @@ function renderInbox(main) {
       return h("article", { class: "in-card ask-card" },
         h("div", { class: "in-top" }, chip(t), h("span", { class: "in-kind warn" }, h("span", { class: "needs" }), "Claude is asking"), h("span", { class: "spacer" }), h("span", { class: "in-when" }, ago(t.updatedAt))),
         h("div", { class: "in-title" }, t.title),
-        ...it.asks.map((a) => questionsOf(a.tool, a.input) ? h("div", { class: "in-ask" },
-          h("div", { class: "ask-what" }, questionsOf(a.tool, a.input)[0].question),
+        ...it.asks.map((a) => { const qs = questionsOf(a.tool, a.input); return qs ? h("div", { class: "in-ask" },
+          h("div", { class: "ask-what" }, qs[0].question),
           h("div", { class: "btns" },
             h("button", { class: "btn primary", type: "button", onclick: () => openThread(t.id) }, "Answer in the thread"),
             h("button", { class: "btn quiet", type: "button", onclick: () => answerFromInbox(t.id, a, "deny") }, "Skip")))
@@ -1049,7 +1057,7 @@ function renderInbox(main) {
             a.canAllowEdits ? h("button", { class: "btn", type: "button", onclick: () => answerFromInbox(t.id, a, "allow-edits") }, "Allow edits in this thread") : null,
             h("button", { class: "btn quiet", type: "button", onclick: () => answerFromInbox(t.id, a, "deny") }, "Don't allow"),
             h("span", { class: "spacer" }),
-            h("button", { class: "btn quiet", type: "button", onclick: () => openThread(t.id) }, "Open thread")))));
+            h("button", { class: "btn quiet", type: "button", onclick: () => openThread(t.id) }, "Open thread"))); }));
     }
     return h("article", { class: "in-card" },
       h("div", { class: "in-top" }, chip(t), h("span", { class: "in-kind " + (t.lastOk === false ? "bad" : "ok") }, icon(t.lastOk === false ? "x" : "check", 13), t.lastOk === false ? "Stopped" : "Finished"), h("span", { class: "spacer" }), h("span", { class: "in-when" }, ago(t.lastDoneAt))),
@@ -1059,7 +1067,7 @@ function renderInbox(main) {
         h("button", { class: "btn primary", type: "button", onclick: () => openThread(t.id) }, "Open"),
         h("button", { class: "btn quiet", type: "button", onclick: () => { markSeen(t.id); render(); } }, "Mark as seen")));
   });
-  main.replaceChildren(
+  fill(main, 
     h("div", { class: "bar" },
       showSideButton(),
       h("span", { class: "title" }, "Waiting for you"),
@@ -1086,7 +1094,7 @@ function openGithub() {
 
 function renderGithub(main) {
   githubPane ||= createGithubPane({ call, h, icon, toast });
-  main.replaceChildren(
+  fill(main, 
     h("div", { class: "bar" },
       showSideButton(),
       h("span", { class: "title" }, "GitHub"),
@@ -1123,7 +1131,7 @@ function applySideHidden() {
 function renderStudio(main) {
   // Renders come often (every thread event); once something's showing, leave it alone.
   if (studioNode && main.contains(studioNode)) return;
-  const put = (...nodes) => { main.replaceChildren(...nodes); studioNode = nodes[nodes.length - 1]; };
+  const put = (...nodes) => { fill(main, ...nodes); studioNode = nodes[nodes.length - 1]; };
   const msg = (title, text, action) => put(
     h("div", { class: "bar" },
       showSideButton(),
@@ -1253,9 +1261,9 @@ function openGuide(section = "") {
 
 function renderGuide(main) {
   const list = h("div", { class: "guide-list" });
-  const fill = () => {
+  const refill = () => {
     const found = searchGuide(S.guideQuery, guideFor().guide);
-    list.replaceChildren(...(found.length ? found.map((s) => h("section", { class: "guide-sec", id: "guide-" + s.id },
+    fill(list, ...(found.length ? found.map((s) => h("section", { class: "guide-sec", id: "guide-" + s.id },
       h("h2", {}, s.title), h("p", { class: "guide-intro" }, s.intro),
       h("ul", { class: "guide-tips" }, ...s.tips.map((tip) => h("li", { html: renderMarkdown(tip) })))))
       : [h("p", { class: "guide-intro" }, "Nothing in the guide matches that.")]),
@@ -1263,9 +1271,9 @@ function renderGuide(main) {
         h("div", { class: "guide-keys" }, ...guideFor().shortcuts.flatMap(([k, what]) => [h("kbd", {}, k), h("span", {}, what)])))]));
   };
   const search = h("input", { type: "search", class: "guide-search", placeholder: "Search the guide: branch, recipe, phone…", value: S.guideQuery || "", "aria-label": "Search the guide",
-    oninput: (e) => { S.guideQuery = e.target.value; fill(); } });
-  fill();
-  main.replaceChildren(
+    oninput: (e) => { S.guideQuery = e.target.value; refill(); } });
+  refill();
+  fill(main, 
     h("div", { class: "bar" },
       showSideButton(),
       h("span", { class: "title" }, "Guide")),
@@ -1273,7 +1281,7 @@ function renderGuide(main) {
       h("h1", {}, "Use B5 Code like a pro"),
       h("p", { class: "guide-intro" }, "Everything it can do, in short tips. B5 Work and automations included."),
       search,
-      h("div", { class: "guide-toc" }, ...guideFor().guide.map((s) => h("button", { type: "button", class: "chip", onclick: () => { S.guideQuery = ""; search.value = ""; fill(); document.getElementById("guide-" + s.id)?.scrollIntoView({ block: "start", behavior: "smooth" }); } }, s.title)),
+      h("div", { class: "guide-toc" }, ...guideFor().guide.map((s) => h("button", { type: "button", class: "chip", onclick: () => { S.guideQuery = ""; search.value = ""; refill(); document.getElementById("guide-" + s.id)?.scrollIntoView({ block: "start", behavior: "smooth" }); } }, s.title)),
         h("button", { type: "button", class: "chip", onclick: () => document.getElementById("guide-keys")?.scrollIntoView({ block: "start", behavior: "smooth" }) }, "Shortcuts")),
       list)),
     h("div"));
@@ -1327,7 +1335,7 @@ function renderQueue(main) {
       : q.waiting ? "On, waiting: every account is at its usage limit. It starts again when one resets."
         : running ? `On: working on #${running.n}${left ? `, ${left} more after it` : ""}.` : left ? "On: starting the next task…" : "On: add a task and it starts.";
   const cards = q.tasks.map((t, i) => queueCard(t, i, q.tasks.length));
-  main.replaceChildren(
+  fill(main, 
     h("div", { class: "bar" },
       showSideButton(),
       h("span", { class: "title" }, "Overnight queue"),
@@ -1779,12 +1787,12 @@ function updateComposer(feed) {
   }
   const p = project();
   const t = thread(), chip = $("where-chip");
-  if (t?.branch) chip.replaceChildren(icon("branch", 13), h("span", {}, t.branch));
-  else if (!t && S.newBranch) chip.replaceChildren(icon("branch", 13), h("span", {}, newBranchName()));
-  else chip.replaceChildren(icon("folder", 13), h("span", {}, p ? p.name : ""));
+  if (t?.branch) fill(chip, icon("branch", 13), h("span", {}, t.branch));
+  else if (!t && S.newBranch) fill(chip, icon("branch", 13), h("span", {}, newBranchName()));
+  else fill(chip, icon("folder", 13), h("span", {}, p ? p.name : ""));
   chip.classList.toggle("static", !!t);
   chip.title = t ? (t.branch ? `On its own branch, in ${home(t.dir)}` : `In ${p ? home(p.dir) : ""}`) : "Where this thread works: the project, or a new branch of its own";
-  $("model-chip").replaceChildren(h("span", {}, currentModelName()), icon("chevronDown", 12));
+  fill($("model-chip"), h("span", {}, currentModelName()), icon("chevronDown", 12));
   sendButton(feed);
   renderTodos(feed);
   renderTasks(feed);
@@ -1799,7 +1807,7 @@ function sendButton(feed = thread() ? feedOf(thread().id) : emptyFeed()) {
   const steer = feed.working && ($("input").value.trim() || S.attach.length);
   const stop = feed.working && !steer;
   send.classList.toggle("stop", stop);
-  send.replaceChildren(icon(stop ? "stop" : "up", 16));
+  fill(send, icon(stop ? "stop" : "up", 16));
   send.title = stop ? "Stop (Esc)" : steer ? "Send now: Claude reads it at its next step" : "Send (Enter)";
   send.setAttribute("aria-label", stop ? "Stop" : "Send");
   $("input").placeholder = feed.working ? (narrow() ? "Steer Claude while it works" : "Steer Claude while it works, or Esc to stop") : thread()?.sideOf ? "Ask about the thread" : "Ask Claude, or / for skills";
@@ -1817,7 +1825,7 @@ function renderTodos(feed) {
   const key = JSON.stringify([open, todos.map((t) => [t.text, t.status])]);
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.replaceChildren(
+  fill(box, 
     h("button", { class: "todos-head", type: "button", "aria-expanded": String(open), onclick: () => { S.todosOpen = !open; renderTodos(feed); } },
       h("span", { class: "chev" + (open ? " open" : "") }, icon("chevron", 12)),
       h("span", { class: "todos-title" }, "To-do"),
@@ -1843,7 +1851,7 @@ function renderTasks(feed) {
   if (box.dataset.key === key) return;
   box.dataset.key = key;
   const count = p.running ? `${p.running} running` : p.failed ? `${p.failed} failed` : "Finished";
-  box.replaceChildren(
+  fill(box, 
     h("button", { class: "todos-head", type: "button", "aria-expanded": String(open), onclick: () => { S.tasksOpen = !open; box.dataset.key = ""; renderTasks(feed); } },
       h("span", { class: "chev" + (open ? " open" : "") }, icon("chevron", 12)),
       h("span", { class: "todos-title" }, "Background"),
@@ -1957,10 +1965,10 @@ async function openImport(p) {
     h("p", { class: "note", style: "margin:0 0 10px" }, `Conversations you started with claude in ${home(p.dir)}. One you pick carries on here as a thread, with what was said so far. Don't keep typing in it in the terminal too.`),
     list]);
   let r;
-  try { r = await call("GET", `/api/projects/${p.id}/sessions`); } catch (e) { list.replaceChildren(h("p", { class: "err" }, e.message)); return; }
-  if (!r.sessions.length) { list.replaceChildren(h("p", { class: "note" }, "None found that aren't already in B5 Code.")); return; }
+  try { r = await call("GET", `/api/projects/${p.id}/sessions`); } catch (e) { fill(list, h("p", { class: "err" }, e.message)); return; }
+  if (!r.sessions.length) { fill(list, h("p", { class: "note" }, "None found that aren't already in B5 Code.")); return; }
   const mb = (n) => (n >= 1e6 ? `${Math.round(n / 1e6)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
-  list.replaceChildren(...r.sessions.map((s) => h("div", { class: "imp-row" },
+  fill(list, ...r.sessions.map((s) => h("div", { class: "imp-row" },
     h("span", { class: "imp-text" }, h("span", { class: "set-title" }, s.title || "Untitled"),
       h("span", { class: "set-desc" }, `${ago(s.at) === "now" ? "just now" : ago(s.at) + " ago"} · ${mb(s.size)}${s.title !== s.first ? " · " + s.first.slice(0, 90) : ""}`)),
     h("button", { class: "btn small", type: "button", onclick: async (e) => {
@@ -2031,7 +2039,7 @@ function toggleModelMenu() {
   const { pick, all, latest } = modelChoices();
   const showAll = menu.dataset.all === "1" || !latest.some((m) => m.value === pick);
   const list = showAll ? all : latest;
-  menu.replaceChildren(...list.map((m) => h("button", {
+  fill(menu, ...list.map((m) => h("button", {
     type: "button", role: "menuitemradio", "aria-checked": String(m.value === pick), class: m.value === pick ? "on" : "",
     onclick: () => chooseModel(pickFor(m, all)),
   }, h("span", { class: "tick" }, m.value === pick ? icon("check", 14) : null),
@@ -2141,7 +2149,7 @@ window.deskDictation = ({ text, state, message }) => {
 function offerAnswers(text, from) {
   const box = $("answers-offer");
   if (!box || !text) return;
-  box.replaceChildren(
+  fill(box, 
     icon("check", 15),
     h("span", { class: "offer-text" }, `Plan answers copied${from ? ` from ${from}` : ""}`),
     h("button", { class: "btn primary", type: "button", onclick: () => {
@@ -2173,7 +2181,7 @@ function togglePlusMenu() {
   if (!menu.hidden) { menu.hidden = true; return; }
   const item = (ic, name, desc, fn) => h("button", { type: "button", role: "menuitem", onclick: () => { menu.hidden = true; fn(); } },
     h("span", { class: "tick" }, icon(ic, 15)), h("span", {}, h("div", { class: "m-name" }, name), h("div", { class: "m-desc" }, desc)));
-  menu.replaceChildren(
+  fill(menu, 
     item("paperclip", "Add photos & files", "Screenshots go in as images Claude can see", () => $("file-input").click()),
     item("slash", "Skills and commands", "Run a skill, like /flaevo-plan", openSlash),
     item("eye", "Open a file in Preview", "A plan page, screenshot, PDF or video", pickPreviewFile));
@@ -2219,7 +2227,7 @@ function renderAttachments() {
   const row = $("attach-row");
   if (!row) return;
   row.hidden = !S.attach.length;
-  row.replaceChildren(...S.attach.map((a) => h("div", { class: "att" + (a.uploading ? " busy" : ""), title: a.name },
+  fill(row, ...S.attach.map((a) => h("div", { class: "att" + (a.uploading ? " busy" : ""), title: a.name },
     a.thumb ? h("img", { src: a.thumb, alt: "" }) : h("span", { class: "att-ic" }, icon("file", 16)),
     a.thumb ? null : h("span", { class: "att-name" }, a.name),
     h("button", { type: "button", class: "att-x", "aria-label": `Remove ${a.name}`, onclick: () => removeAttachment(a) }, icon("x", 11)))));
@@ -2274,7 +2282,7 @@ function renderSlash(value) {
   S.slash.open = true;
   S.slash.index = Math.min(S.slash.index, list.length - 1);
   box.hidden = false;
-  box.replaceChildren(...list.map((c, i) => h("button", {
+  fill(box, ...list.map((c, i) => h("button", {
     type: "button", role: "option", "aria-selected": String(i === S.slash.index), class: i === S.slash.index ? "on" : "",
     onmousedown: (e) => { e.preventDefault(); pickSlash(c); },
   }, h("span", { class: "name" }, "/" + c.name), h("span", { class: "desc" }, c.description))));
@@ -2398,8 +2406,8 @@ function pickBranch() {
     try {
       const name = branchName({ kind: kind.value, issue: issue.value, what: what.value });
       const dir = home(worktreeDir(p.dir, name));
-      preview.replaceChildren(icon("branch", 13), h("b", {}, name), h("span", {}, ` from a fresh main, in ${dir}`));
-    } catch (e) { preview.replaceChildren(h("span", { style: "color:var(--faint)" }, what.value ? e.message : "The branch name appears here.")); }
+      fill(preview, icon("branch", 13), h("b", {}, name), h("span", {}, ` from a fresh main, in ${dir}`));
+    } catch (e) { fill(preview, h("span", { style: "color:var(--faint)" }, what.value ? e.message : "The branch name appears here.")); }
   };
   for (const el of [kind, issue, what]) el.addEventListener("input", show);
   show();
@@ -2438,9 +2446,9 @@ async function loadPr(id) {
 }
 
 function renderPrBox(box, t) {
-  if (!t?.branch) return box.replaceChildren();
+  if (!t?.branch) return fill(box);
   const st = S.pr[t.id];
-  if (!st) { loadPr(t.id); return box.replaceChildren(); }
+  if (!st) { loadPr(t.id); return fill(box); }
   const pr = st.pr;
   const working = feedOf(t.id).working;
   const btn = (label, attrs) => h("button", { class: "btn small", type: "button", ...attrs }, label);
@@ -2464,7 +2472,7 @@ function renderPrBox(box, t) {
     if (pr.state === "merged" && !st.removed) kids.push(btn("Remove worktree", { title: home(t.dir), onclick: () => removeWorktree(t) }));
   }
   if (st.removed) kids.push(h("span", { class: "pr-note" }, "Worktree removed"));
-  box.replaceChildren(...kids);
+  fill(box, ...kids);
 }
 
 // ── Next steps ───────────────────────────────────────────────────────────────
@@ -2482,7 +2490,7 @@ function renderNextSteps(box, t, feed) {
   box.hidden = !steps.length;
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.replaceChildren(...stepButtons(t, steps));
+  fill(box, ...stepButtons(t, steps));
 }
 
 const doStep = (t, s) => (s.text ? sendStep(t, s.text) : s.id === "merge" ? mergeBranch(t) : s.id === "recipe" ? saveRecipe(t) : s.id === "build" ? buildIn(t) : s.id === "post" ? writePost(t) : null);
@@ -2804,7 +2812,7 @@ function openPalette() {
     shown = [...new Set(ranked.map((it) => it.group))].flatMap((g) => ranked.filter((it) => it.group === g));
     pick = Math.min(pick, Math.max(0, shown.length - 1));
     let group = "";
-    list.replaceChildren(...(shown.length ? shown.flatMap((it, i) => {
+    fill(list, ...(shown.length ? shown.flatMap((it, i) => {
       const head = it.group !== group ? [h("div", { class: "palette-group" }, (group = it.group))] : [];
       return [...head, h("button", { type: "button", role: "option", class: "palette-item" + (i === pick ? " on" : ""), "aria-selected": String(i === pick),
         onmousemove: () => { if (pick !== i) { pick = i; draw(); } }, onclick: () => run(it) },
@@ -3178,7 +3186,7 @@ function paneParts() {
   const files = createFilesPane({ call, h, icon, toast, onMac: !S.phone,
     onMention: mention, onPreview: (rel) => openPreview(workDir() + "/" + rel) });
   paneView = { tabs, actions, changes, preview, frame, previewHead, addr, empty, doc, terminal, files, stage, device, deviceBox, caption, src: "" };
-  $("pane").replaceChildren(h("div", { class: "pane-bar" }, tabs, h("span", { class: "spacer" }), actions), changes, preview, terminal.el, files.el);
+  fill($("pane"), h("div", { class: "pane-bar" }, tabs, h("span", { class: "spacer" }), actions), changes, preview, terminal.el, files.el);
   return paneView;
 }
 
@@ -3202,9 +3210,9 @@ function renderPane() {
   // A Work space isn't code: its pane is the files Claude makes, and what they look like.
   const work = project()?.kind === "work";
   if (work && S.paneTab === "changes") S.paneTab = "files";
-  v.tabs.replaceChildren(...(work ? [] : [tab("changes", "Changes", files.length)]), tab("files", "Files"), tab("preview", "Preview"), ...(S.phone ? [] : [tab("terminal", "Terminal")]));
+  fill(v.tabs, ...(work ? [] : [tab("changes", "Changes", files.length)]), tab("files", "Files"), tab("preview", "Preview"), ...(S.phone ? [] : [tab("terminal", "Terminal")]));
   const term = v.terminal;
-  v.actions.replaceChildren(
+  fill(v.actions, 
     ...(S.paneTab === "changes"
       ? []
       : S.paneTab === "files"
@@ -3234,7 +3242,7 @@ function renderPane() {
   const sameChanges = changesKey && v.changesKey && changesKey.every((k, i) => k === v.changesKey[i]);
   if (changesKey) v.changesKey = changesKey;
   if (S.paneTab === "changes" && !sameChanges) {
-    v.changes.replaceChildren(...[].concat(!c ? h("div", { class: "pane-empty" }, "Pick a project to see its changes.")
+    fill(v.changes, ...[].concat(!c ? h("div", { class: "pane-empty" }, "Pick a project to see its changes.")
       : c.removed ? h("div", { class: "pane-empty" }, "This thread's worktree has been removed.")
       : !c.git ? h("div", { class: "pane-empty" }, "This folder isn't a Git repo.")
         : [...paneSteps(), changesSummary(c, files), ...changesHead(c), ...(!files.length ? [h("div", { class: "pane-empty" }, c.scope === "chat" ? "No changes in this chat." : "No uncommitted changes.")]
@@ -3273,7 +3281,7 @@ function renderPane() {
     const shown = !p ? "" : isUrl ? p.replace(/^https?:\/\//, "").replace(/^([^/]+)\/$/, "$1") : p;
     v.addr.dataset.shown = shown;
     if (document.activeElement !== v.addr) { v.addr.value = shown; v.addr.title = p || ""; }
-    if (!p) v.previewHead.replaceChildren(v.addr);
+    if (!p) fill(v.previewHead, v.addr);
     v.stage.hidden = !src || useDoc;
     // Pages and dev servers can be shown on a phone, tablet or computer screen.
     const isPage = isUrl || /\.html?$/i.test(p || "");
@@ -3285,7 +3293,7 @@ function renderPane() {
       const cur = ver || latest;
       const step = (d) => { const i = versions.findIndex((x) => x.v === cur) + d; if (versions[i]) { S.previewVersion = versions[i].v; render(); } };
       // replaceChildren would show a null as the text "null": empty slots are dropped first.
-      v.previewHead.replaceChildren(...[
+      fill(v.previewHead, ...[
         arts.length > 1
           ? h("select", { class: "art-pick", "aria-label": "This thread's pages", onchange: (e) => openPreview(e.target.value) },
             ...(arts.some((a) => toHome(a.path) === p) ? [] : [h("option", { value: p, selected: true }, baseName(p))]),
@@ -3314,13 +3322,13 @@ function renderPane() {
         const view = h("div", { class: "img-view", title: "Click for actual size" });
         view.append(h("img", { src, alt: baseName(p), onclick: () => { const full = view.classList.toggle("full"); view.title = full ? "Click to fit" : "Click for actual size"; },
           onerror: () => view.replaceWith(h("div", { class: "pane-empty" }, "The picture isn't there any more.")) }));
-        v.doc.replaceChildren(view);
+        fill(v.doc, view);
       }
     } else if (useDoc) {
       delete v.doc.dataset.img;
       const text = S.previewSource[`${p}@${ver || ""}`];
       if (text === undefined) loadSource(p, ver);
-      v.doc.replaceChildren(text == null ? h("div", { class: "pane-empty" }, "Opening…")
+      fill(v.doc, text == null ? h("div", { class: "pane-empty" }, "Opening…")
         : text.error ? h("div", { class: "pane-empty" }, text.error)
           : code ? h("div", { class: "code-view" },
             h("pre", { class: "gutter", "aria-hidden": "true" }, Array.from({ length: text.split("\n").length }, (_, i) => i + 1).join("\n")),
@@ -3332,8 +3340,8 @@ function renderPane() {
       v.src = src; v.frame.src = src;
     }
     if (!v.stage.hidden) layoutScreen();
-    if (p && !useDoc && !src) v.empty.replaceChildren(h("div", {}, "Opening…"));
-    if (!p) v.empty.replaceChildren(h("div", {}, "Nothing to preview yet."),
+    if (p && !useDoc && !src) fill(v.empty, h("div", {}, "Opening…"));
+    if (!p) fill(v.empty, h("div", {}, "Nothing to preview yet."),
       h("div", { style: "margin-top:4px" }, "Type a link above (localhost:3000, or a site), or open a file. Pages Claude makes open here by themselves, and file paths and localhost links in replies open here when clicked. Pick a phone or tablet to see a page at its size."),
       h("button", { class: "btn", type: "button", style: "margin-top:12px", onclick: pickPreviewFile }, "Open a file…"));
   }
@@ -3346,7 +3354,7 @@ const canPreview = (f) => PREVIEWABLE.test(String(f || ""));
 function previewUrl(p) {
   // A Mac's path loses its first "/"; Windows's starts with its drive (C:/Users/…).
   const abs = /^~[\\/]/.test(p) ? p : p.replace(/^\/+/, "");
-  return `${S.previewBase}/${abs.split(/[\\/]/).filter(Boolean).map(encodeURIComponent).join("/")}`;
+  return `${S.previewBase}/${abs.split(WIN() ? /[\\/]/ : "/").filter(Boolean).map(encodeURIComponent).join("/")}`;
 }
 
 /** Show a file in the Preview pane. Relative paths are inside the project. */
@@ -3411,7 +3419,7 @@ function layoutScreen() {
   if (!scr) {
     for (const el of [v.deviceBox, v.device, v.frame]) el.removeAttribute("style");
     v.device.className = "device";
-    v.caption.replaceChildren();
+    fill(v.caption);
     return;
   }
   const f = fitScreen(scr, S.screenTurned, v.stage.clientWidth, v.stage.clientHeight - 30);
@@ -3419,7 +3427,7 @@ function layoutScreen() {
   v.device.style.cssText = `width:${f.outerW}px;height:${f.outerH}px;padding:${S.screenTurned ? `${f.bezel}px ${f.bezel + f.chin}px` : `${f.bezel + f.chin}px ${f.bezel}px`};transform:scale(${f.scale})`;
   v.deviceBox.style.cssText = `width:${Math.round(f.outerW * f.scale)}px;height:${Math.round(f.outerH * f.scale)}px`;
   v.frame.style.cssText = `width:${f.w}px;height:${f.h}px`;
-  v.caption.replaceChildren(...[h("span", {}, scr.name), h("span", { class: "dim" }, `${f.w} × ${f.h}`), f.scale < 1 ? h("span", { class: "dim" }, `${Math.round(f.scale * 100)}%`) : null].filter(Boolean));
+  fill(v.caption, ...[h("span", {}, scr.name), h("span", { class: "dim" }, `${f.w} × ${f.h}`), f.scale < 1 ? h("span", { class: "dim" }, `${Math.round(f.scale * 100)}%`) : null].filter(Boolean));
 }
 
 function pickPreviewFile() {
@@ -3624,7 +3632,7 @@ async function browse(box, at, onPick) {
   catch { if (at !== "~") return browse(box, "~", onPick); return; } // a typed path that isn't there: start at home
   const crumbs = home(r.path).split(/[\\/]/);
   box.hidden = false;
-  box.replaceChildren(
+  fill(box, 
     h("div", { class: "fb-head" },
       r.parent ? h("button", { class: "icon", type: "button", title: "Up one folder", "aria-label": "Up one folder", onclick: () => browse(box, r.parent, onPick) }, icon("up", 14)) : null,
       h("span", { class: "fb-path", title: r.path }, crumbs.join(" / ")),
@@ -3695,16 +3703,16 @@ function openSettings(page = null) {
   const win = h("div", { class: "settings-win" + (phone ? " phone" : ""), role: "dialog", "aria-modal": "true", "aria-label": "Settings" }, nav, body);
   const ov = h("div", { class: "overlay set-overlay", onclick: (e) => { if (e.target === ov) close(); } }, win);
   const draw = () => {
-    nav.replaceChildren(h("h2", {}, "Settings"), ...SETTINGS_PAGES.map(([id, label, ic]) =>
+    fill(nav, h("h2", {}, "Settings"), ...SETTINGS_PAGES.map(([id, label, ic]) =>
       h("button", { type: "button", class: id === at ? "on" : "", "aria-current": id === at ? "page" : null, onclick: () => { at = id; draw(); } }, icon(ic, 16), h("span", { class: "set-nav-label" }, label), phone ? icon("chevron", 14) : null)));
     win.classList.toggle("at-page", !!at);
     if (phone && !at) {
-      body.replaceChildren();
+      fill(body);
       nav.prepend(h("div", { class: "set-bar" }, h("button", { class: "icon", type: "button", "aria-label": "Close", onclick: () => close() }, icon("x", 18))));
       return;
     }
     const [, title] = SETTINGS_PAGES.find(([id]) => id === at);
-    body.replaceChildren(
+    fill(body, 
       h("div", { class: "set-top" },
         phone ? h("button", { class: "icon", type: "button", "aria-label": "Back to Settings", onclick: () => { at = null; draw(); } }, icon("chevronLeft", 18)) : null,
         h("h2", {}, title), h("span", { class: "set-sub" }, SETTINGS_SUBS[at]),
@@ -3864,7 +3872,7 @@ function accountsSection() {
     const list = S.accounts?.length ? S.accounts : [{ id: "main", name: "Main", email: S.account?.email || "", plan: S.account?.plan || "", signedIn: !!S.account }];
     const extra = list.length > 1;
     // replaceChildren would draw a null as the word "null": only the rows that are there.
-    box.replaceChildren(...[
+    fill(box, ...[
       ...list.map((a) => h("div", { class: "set-row" },
         h("span", {},
           h("span", { class: "set-title" }, a.id === "main" ? (a.email || "Not signed in") : `${a.name}${a.email && a.name !== a.email ? ` · ${a.email}` : ""}`),
@@ -3917,10 +3925,10 @@ async function addAccountDialog(onDone) {
         throw new Error("Claude Code didn't give a sign-in link. Press Continue to try again.");
       }
       name.disabled = email.disabled = true;
-      linkRow.replaceChildren(
+      fill(linkRow, 
         h("a", { class: "btn primary", href: login.url, target: "_blank", rel: "noopener" }, icon("external", 13), "Open the sign-in page"),
         h("button", { class: "btn quiet", type: "button", onclick: () => copy(login.url) }, "Copy the link"));
-      step2.replaceChildren(h("label", { for: "acode" }, "1. Sign in, and approve. 2. Copy the code the page shows. 3. Paste it here."), linkRow, code);
+      fill(step2, h("label", { for: "acode" }, "1. Sign in, and approve. 2. Copy the code the page shows. 3. Paste it here."), linkRow, code);
       step2.hidden = false;
       document.querySelector(".dialog .btn.primary[type=submit]").textContent = "Add account";
       setTimeout(() => code.focus(), 0);
@@ -3954,7 +3962,7 @@ function accountChip(t) {
     const menu = $("acct-menu");
     // A second click on the label closes the menu (and its one outside-click listener).
     if (!menu.hidden) { menu.hidden = true; document.removeEventListener("mousedown", menu.closer); return; }
-    menu.replaceChildren(...list.map((a) => h("button", { type: "button", role: "menuitemradio", "aria-checked": String(a.id === on?.id), class: a.id === on?.id ? "on" : "",
+    fill(menu, ...list.map((a) => h("button", { type: "button", role: "menuitemradio", "aria-checked": String(a.id === on?.id), class: a.id === on?.id ? "on" : "",
       onclick: async () => {
         menu.hidden = true;
         if (a.id === on?.id) return;
@@ -4005,7 +4013,7 @@ function soundRows() {
     off: "macOS has notifications for B5 Code turned off. Turn them on in Notifications settings.",
     unasked: "macOS hasn't asked about B5 Code yet. Quit B5 Code (⌘Q), open it again, and click Allow.",
   };
-  window.deskNotifyStatus = (st) => status.replaceChildren(STATUS[st] || st, " ",
+  window.deskNotifyStatus = (st) => fill(status, STATUS[st] || st, " ",
     st === "on" ? "" : h("a", { href: "#", onclick: (e) => { e.preventDefault(); native.postMessage({ type: "openNotificationSettings" }); } }, "Open Notifications settings"));
   const test = h("button", { class: "btn small", type: "button", onclick: () => {
     native.postMessage({ type: "notify", title: "B5 Code", body: "This is how a finished thread looks." });
@@ -4028,7 +4036,7 @@ function openProjectSettings(p) {
   const name = h("input", { value: p.name, "aria-label": "Project name", style: "width:220px" });
   const known = p.knownConnectors || [];
   const list = h("div", { class: "conn-list" });
-  const drawList = () => list.replaceChildren(...(known.length
+  const drawList = () => fill(list, ...(known.length
     ? known.map((c) => h("span", { class: "conn" + (connectors === "off" ? " off" : "") , title: c.status }, connectorName(c.name)))
     : [h("span", { class: "set-desc" }, "The list appears after this project's first message.")]));
   drawList();
@@ -4082,7 +4090,7 @@ function checksSettings(p) {
     on.checked = c.on;
     net.checked = c.network;
     shown = c.runs;
-    runs.replaceChildren(...c.runs.map((r) => h("div", {}, h("span", { class: "review-label" }, r.name), h("pre", {}, r.runs))));
+    fill(runs, ...c.runs.map((r) => h("div", {}, h("span", { class: "review-label" }, r.name), h("pre", {}, r.runs))));
     note.textContent = ro ? `Change checks on the ${MAC()}.` : c.found.length ? `Found in this project: ${c.found.map((x) => x.name).join(", ")}.` : "None found: add your own, one per line.";
   }, () => { note.textContent = ""; });
   load();
@@ -4147,9 +4155,9 @@ function phoneSection() {
         h("button", { class: "btn quiet", type: "button", style: "color:var(--bad)", onclick: async () => { try { draw(await call("DELETE", `/api/phone/devices/${d.id}`)); } catch (x) { toast(x.message); } } }, "Remove")))
         : [h("div", { class: "set-desc", style: "padding:4px 0 8px" }, "No phones paired yet.")]));
     }
-    box.replaceChildren(...kids);
+    fill(box, ...kids);
   };
-  call("GET", "/api/phone").then((st) => draw(st)).catch((x) => box.replaceChildren(h("p", { class: "note" }, x.message)));
+  call("GET", "/api/phone").then((st) => draw(st)).catch((x) => fill(box, h("p", { class: "note" }, x.message)));
   return box;
 }
 
@@ -4208,9 +4216,9 @@ function thisPhone() {
       h("span", {}, h("span", { class: "set-title" }, "B5 Code as an app"),
         h("span", { class: "set-desc" }, installed ? "Installed: opening from its icon." : installPrompt ? "Its own icon on your Home screen, full screen, without Chrome's bar." : "In Chrome's menu (⋮), choose Install app or Add to Home screen. It needs the Tailscale address.")),
       !installed && installPrompt ? h("button", { class: "btn", type: "button", onclick: async () => { installPrompt.prompt(); await installPrompt.userChoice.catch(() => {}); installPrompt = null; draw(); } }, "Install") : null));
-    box.replaceChildren(...rows);
+    fill(box, ...rows);
   };
-  draw().catch((x) => box.replaceChildren(h("p", { class: "note" }, x.message)));
+  draw().catch((x) => fill(box, h("p", { class: "note" }, x.message)));
   return box;
 }
 

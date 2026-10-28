@@ -33,4 +33,6 @@ test("the server keeps answers only when they answer exactly the questions asked
   assert.equal(cleanAnswers(qs, { ...good, extra: "x" }), null, "one not asked");
   assert.equal(cleanAnswers(qs, { ...good, "Which features?": "x".repeat(5000) }), null, "too long");
   assert.equal(cleanAnswers(null, good), null, "not a question");
+  const twice = questionsOf(ASK_TOOL, { questions: [{ question: "Which?", header: "A", options: [{ label: "x" }] }, { question: "Which?", header: "B", options: [{ label: "y" }] }] });
+  assert.deepEqual(cleanAnswers(twice, { "Which?": "y" }), { "Which?": "y" }, "two worded the same share one answer");
 });

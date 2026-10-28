@@ -45,8 +45,7 @@ export function pagePath(p, home = "", win = IS_WIN) {
   return within(s, h, win) ? "~" + s.slice(h.length) : s;
 }
 
-/** The last part of a path, either slash. */
-export const baseName = (p) => String(p || "").split(/[\\/]/).filter(Boolean).pop() || String(p || "");
+export { baseName } from "../web/paths.js";
 
 /**
  * How to start `claude`: [command, leading args]. On a Mac it's on the PATH. On Windows the native

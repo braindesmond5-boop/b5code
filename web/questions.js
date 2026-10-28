@@ -9,7 +9,8 @@ export const ASK_TOOL = "AskUserQuestion";
 /** The questions in the tool's input, cleaned, or null if it isn't a question. */
 export function questionsOf(tool, input) {
   if (tool !== ASK_TOOL || !Array.isArray(input?.questions)) return null;
-  const qs = input.questions.filter((q) => q && typeof q.question === "string" && q.question.trim()).slice(0, 4).map((q) => ({
+  // Every one of them (Claude Code asks one to four): Claude is given all the questions back, so each needs its answer.
+  const qs = input.questions.filter((q) => q && typeof q.question === "string" && q.question.trim()).map((q) => ({
     question: q.question,
     header: typeof q.header === "string" ? q.header : "",
     multiSelect: q.multiSelect === true,
@@ -43,5 +44,6 @@ export function cleanAnswers(questions, answers) {
     if (typeof a !== "string" || !a.trim() || a.length > 4000) return null;
     out[q.question] = a.trim();
   }
-  return Object.keys(answers).length === questions.length ? out : null;
+  // Keyed by text: two questions worded the same share one answer.
+  return Object.keys(answers).length === new Set(questions.map((q) => q.question)).size ? out : null;
 }

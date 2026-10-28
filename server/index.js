@@ -695,7 +695,8 @@ function startLogin(name, email) {
   ensureLinks(fs, CLAUDE_DIR, dir);
   const acct = { id, dir };
   // BROWSER: don't open it ourselves; the page offers the link, since the browser may be signed in to the other account.
-  const proc = spawn(claude()[0], [...claude()[1], "auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], { env: { ...accountEnv(process.env, acct), BROWSER: "/usr/bin/true" }, stdio: ["pipe", "pipe", "pipe"] });
+  // (A Mac's /usr/bin/true: Windows has none, so there Claude Code may open the browser as well.)
+  const proc = spawn(claude()[0], [...claude()[1], "auth", "login", "--claudeai", ...(email ? ["--email", email] : [])], { env: { ...accountEnv(process.env, acct), ...(IS_WIN ? {} : { BROWSER: "/usr/bin/true" }) }, stdio: ["pipe", "pipe", "pipe"] });
   const l = { id, name, dir, proc, out: "", state: "waiting", message: "", timer: null };
   const take = (d) => { l.out = (l.out + d).slice(-20000); };
   proc.stdout.on("data", take);
@@ -1349,7 +1350,8 @@ function previewLink(rest, base) {
   const file = realFile(previewPathIn(rest, HOME));
   if (!file) return null;
   const scope = previewScope(file, REAL_HOME);
-  return `${base}/${scopeToken(scope)}/${file.split(/[\\/]/).filter(Boolean).map(encodeURIComponent).join("/")}`;
+  // A Mac's file name may hold a backslash: only Windows splits on it.
+  return `${base}/${scopeToken(scope)}/${file.split(IS_WIN ? /[\\/]/ : "/").filter(Boolean).map(encodeURIComponent).join("/")}`;
 }
 
 /** The real path, if it exists and is in your home folder; else null. */
@@ -1547,6 +1549,7 @@ function whatsRunning() {
 
 /** Shells in the Terminal pane running something (a dev server, say) rather than waiting at the prompt. */
 function busyTerminals() {
+  if (IS_WIN) return winTermsBusy;
   let n = 0;
   for (const t of terminals.terms.values()) {
     const fg = path.basename(String(t.pty?.process || ""));
@@ -1562,9 +1565,25 @@ async function codeStarts() {
   return ok.every(Boolean);
 }
 
+// On Windows node-pty names only the shell, never the program running in it: a shell is busy when it
+// has started a program of its own (the console host it runs in doesn't count). Asked just before a
+// restart or an update decides whether anything would be cut short.
+let winTermsBusy = 0;
+function checkWindowsTerminals() {
+  const pids = [...terminals.terms.values()].filter((t) => t.running && t.pty?.pid).map((t) => Number(t.pty.pid));
+  if (!IS_WIN || !pids.length) { winTermsBusy = 0; return Promise.resolve(); }
+  const filter = pids.map((p) => `ParentProcessId=${p}`).join(" OR ");
+  const script = `Get-CimInstance Win32_Process -Filter '${filter}' | Where-Object { $_.Name -notmatch '^(conhost|OpenConsole)\\.exe$' } | ForEach-Object { $_.ParentProcessId }`;
+  return new Promise((resolve) => execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 15000 }, (err, out) => {
+    if (!err) winTermsBusy = new Set(String(out).split(/\s+/).filter(Boolean)).size;
+    resolve();
+  }));
+}
+
 /** Restart for the update if it's waiting and nothing is running. */
 async function updateIfIdle() {
   if (store.state.settings?.autoUpdate === false || updating) return;
+  await checkWindowsTerminals();
   const now = serverPrint();
   if (now === STARTED_AS) return;
   if (now !== codeSeen.print) { codeSeen = { print: now, at: Date.now() }; return; } // still being changed
@@ -1578,17 +1597,24 @@ setInterval(() => updateIfIdle().catch((e) => console.error(`Update: ${e.message
 // `b5 update` (bin/b5.mjs), which stops this server, fast-forwards, reinstalls or rebuilds the app if
 // those changed, and starts it again. A folder with changes of its own is never updated.
 const INSTALL = (() => { try { return JSON.parse(fs.readFileSync(path.join(store.dataDir, "install.json"), "utf8")); } catch { return null; } })();
-let fetching = false;
+let fetching = false, cantUpdate = "";
 async function updateFromGitHub() {
-  if (INSTALL?.updates !== "github" || store.state.settings?.autoUpdate === false || fetching || updating || whatsRunning().length) return;
+  if (INSTALL?.updates !== "github" || store.state.settings?.autoUpdate === false || fetching || updating) return;
+  await checkWindowsTerminals();
+  if (whatsRunning().length) return;
   fetching = true;
   try {
     await new Promise((resolve) => execFile("git", ["-C", ROOT, "fetch", "--quiet", "origin", "main"], { timeout: 120000, windowsHide: true }, () => resolve()));
-    const [head, next, base] = await Promise.all([git(["rev-parse", "HEAD"], ROOT), git(["rev-parse", "origin/main"], ROOT), git(["merge-base", "HEAD", "origin/main"], ROOT)]);
-    if (!head || !next || head === next || base !== head || whatsRunning().length) return; // up to date, or not a fast-forward
+    const [head, next, base, dirty] = await Promise.all([git(["rev-parse", "HEAD"], ROOT), git(["rev-parse", "origin/main"], ROOT), git(["merge-base", "HEAD", "origin/main"], ROOT), git(["status", "--porcelain", "--untracked-files=no"], ROOT)]);
+    if (!head || !next || head === next) return; // up to date
+    // What `b5 update` would refuse: said once in the log, and nothing is stopped for it.
+    const why = base !== head ? "this folder has commits GitHub's main doesn't" : dirty ? "this folder has changes of its own" : fs.existsSync(path.join(store.dataDir, ".starting")) ? "" : null;
+    if (why !== null) { if (why && why !== cantUpdate) console.log(`Not updating from GitHub: ${why} (${ROOT}).`); cantUpdate = why; return; }
+    if (whatsRunning().length) return;
     console.log(`Updating from GitHub: ${head.slice(0, 7)} → ${next.slice(0, 7)}`);
     updating = true;
-    broadcast(null, { kind: "restarting" });
+    // No "restarting" word to the page: this server stays up until `b5 update` stops it, and a page
+    // told now would reload onto the old code at once. It sees the server go, and reconnects.
     const log = fs.openSync(path.join(store.dataDir, "b5.log"), "a");
     spawn(process.execPath, [path.join(ROOT, "bin", "b5.mjs"), "update", "--quiet"], { cwd: ROOT, detached: true, windowsHide: true, stdio: ["ignore", log, log] }).unref();
     fs.closeSync(log);
@@ -1705,6 +1731,7 @@ async function api(req, res, url) {
     if (req.b5Remote) return send(res, 403, { error: `Restart B5 Code from the ${MAC}.` });
     if (!(await codeStarts())) return send(res, 409, { error: "The new code has a mistake that would stop B5 Code starting, so it keeps running the old one." });
     const body = await readBody(req);
+    await checkWindowsTerminals();
     const busy = whatsRunning();
     if (busy.length && !body.carryOn) return send(res, 409, { error: `Still working: ${busy.join(", ")}. Restart when ${busy.length === 1 ? "it's" : "they're"} done.`, busy });
     // Cut short now, carried on after: the threads working or asking.
