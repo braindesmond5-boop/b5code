@@ -3026,7 +3026,7 @@ tailnetAtStart();
 
 server.listen(PORT, HOST, () => {
   // Settings › Studio › Start with B5 Code: the editor is ready before Studio is opened.
-  if (store.state.settings?.studioAutostart !== false) {
+  if (store.state.settings?.studioAutostart !== false && !IS_WIN) { // B5 Studio is a Mac project: not looked for on Windows
     const dir = studioDir(store.state.projects, HOME);
     if (dir) startStudio(dir, path.join(store.dataDir, "studio.log")).catch(() => {});
   }

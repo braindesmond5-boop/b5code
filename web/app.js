@@ -609,7 +609,9 @@ window.addEventListener("resize", () => requestAnimationFrame(sendRegions));
 // Above them New (what it makes follows the space) and Search (⌘K); in Code, chips for
 // Inbox, Queue and GitHub; at the foot one line: you, your session's usage, Guide, Settings.
 
-const SPACES = [["chat", "Chat", "chat"], ["code", "Code", "code"], ["work", "Work", "work"], ["studio", "Studio", "studio"]];
+// B5 Studio is a Mac project (it isn't part of the Windows install, and parts of it are Mac-only): not shown on Windows.
+const ALL_SPACES = [["chat", "Chat", "chat"], ["code", "Code", "code"], ["work", "Work", "work"], ["studio", "Studio", "studio"]];
+const SPACES_NOW = () => ALL_SPACES.filter(([id]) => !(id === "studio" && WIN()));
 const spaceOf = (p) => (p?.kind === "chat" ? "chat" : p?.kind === "work" ? "work" : "code");
 const SHOWN = 4; // a project's latest threads; the rest behind "Show N more"
 
@@ -718,7 +720,7 @@ function usageRing() {
 function renderSide() {
   const q = S.query.trim().toLowerCase();
   const hit = (t) => !q || t.title.toLowerCase().includes(q);
-  if (!SPACES.some(([id]) => id === S.space)) S.space = "code"; // never stuck on a space that isn't one
+  if (!SPACES_NOW().some(([id]) => id === S.space)) S.space = "code"; // never stuck on a space that isn't one
   const space = S.space;
   const a = S.account;
   const inbox = inboxCount({ threads: S.threads, waiting: S.waiting, seen: S.seen, openThreadId: S.view === "thread" ? S.threadId : null });
@@ -726,13 +728,13 @@ function renderSide() {
   const chip = (view, ic, label, onclick, n, quiet) => h("button", { class: "chip" + (S.view === view ? " on" : ""), type: "button", onclick }, icon(ic, 13), label, n ? h("span", { class: "badge" + (quiet ? " quiet" : "") }, String(n)) : null);
   const many = accountsShown().length > 1;
   const phone = phoneWidth();
-  const spaceTabs = h("div", { class: "spaces" + (phone ? " tabbar" : ""), role: "tablist", "aria-label": "Spaces" }, ...SPACES.map(([id, label, ic]) =>
+  const spaceTabs = h("div", { class: "spaces" + (phone ? " tabbar" : ""), role: "tablist", "aria-label": "Spaces" }, ...SPACES_NOW().map(([id, label, ic]) =>
     h("button", { type: "button", role: "tab", "aria-selected": String(space === id), class: space === id ? "on" : "", title: label, "aria-label": label, onclick: () => setSpace(id) }, icon(ic, phone ? 20 : 14), h("span", { class: "space-label" }, label))));
   fill($("side"), ...[
     phone
       // On a phone: the space's name, large, with Search, New and you; the spaces are a tab bar below.
       ? h("div", { class: "side-top phone-top" },
-        h("h1", {}, SPACES.find(([id]) => id === space)[1]),
+        h("h1", {}, SPACES_NOW().find(([id]) => id === space)[1]),
         h("button", { class: "icon", type: "button", "aria-label": "Search", onclick: openPalette }, icon("search", 19)),
         h("button", { class: "icon", type: "button", "aria-label": space === "chat" ? "New chat" : space === "work" ? "New task" : space === "studio" ? "New video" : "New thread", onclick: newInSpace }, icon("compose", 19)),
         h("button", { class: "avatar phone-me", type: "button", "aria-label": "You and Settings", onclick: () => openSettings() }, (a?.email || "?").slice(0, 1).toUpperCase()))
@@ -752,7 +754,7 @@ function renderSide() {
         chip("github", "github", "GitHub", openGithub))
         : space === "studio" ? null
         : h("div", { class: "side-chips one" }, chip("inbox", "inbox", "Waiting for you", openInbox, inbox))),
-    h("nav", { class: "side-list", "aria-label": SPACES.find(([id]) => id === space)[1] }, ...spaceList(space, q, hit)),
+    h("nav", { class: "side-list", "aria-label": SPACES_NOW().find(([id]) => id === space)[1] }, ...spaceList(space, q, hit)),
     // Two or more accounts: each one's card, with its meters and whether it's full, above the foot.
     !phone && many ? accountCards() : null,
     phone ? spaceTabs : h("div", { class: "side-foot" },
@@ -2980,7 +2982,7 @@ function paletteItems() {
     ...S.projects.filter((x) => x.id !== p?.id).map((x) => item("Actions", `New chat in ${x.name}`, () => startNew(x.id), { keywords: "thread project" })),
     item("Go to", "Waiting for you", openInbox, { keywords: "inbox questions finished", top: true, weight: 8 }),
     item("Go to", "GitHub", openGithub, { keywords: "pull requests prs issues reviews" }),
-    item("Go to", "Studio", openStudio, { keywords: "video editor b5 studio animation film remotion" }),
+    ...(WIN() ? [] : [item("Go to", "Studio", openStudio, { keywords: "video editor b5 studio animation film remotion" })]),
     ...(WIN() ? [] : [item("Go to", "Overnight queue", openQueue, { keywords: "night tasks later" })]),
     item("Go to", "Guide", () => openGuide(), { keywords: "help how to tips shortcuts", top: true, hint: `${KEY()}/` }),
     item("Go to", "Settings", openSettings, { keywords: "preferences options accounts phone", hint: `${KEY()},` }),
@@ -3886,7 +3888,9 @@ function applySettings() {
 // ── Settings ─────────────────────────────────────────────────────────────────
 // A window with its groups as rows on the left: General, Chat, Code, Work, Studio, Account.
 // On a phone, the groups are a list and each opens as its own page.
-const SETTINGS_PAGES = [["general", "General", "general"], ["chat", "Chat", "chat"], ["code", "Code", "code"], ["work", "Work", "work"], ["studio", "Studio", "studio"], ["account", "Account", "account"]];
+const ALL_SETTINGS_PAGES = [["general", "General", "general"], ["chat", "Chat", "chat"], ["code", "Code", "code"], ["work", "Work", "work"], ["studio", "Studio", "studio"], ["account", "Account", "account"]];
+
+const settingsPages = () => ALL_SETTINGS_PAGES.filter(([id]) => !(id === "studio" && WIN()));
 
 function openSettings(page = null) {
   const mm = $("model-menu");
@@ -3903,7 +3907,7 @@ function openSettings(page = null) {
   const win = h("div", { class: "settings-win" + (phone ? " phone" : ""), role: "dialog", "aria-modal": "true", "aria-label": "Settings" }, nav, body);
   const ov = h("div", { class: "overlay set-overlay", onclick: (e) => { if (e.target === ov) close(); } }, win);
   const draw = () => {
-    fill(nav, h("h2", {}, "Settings"), ...SETTINGS_PAGES.map(([id, label, ic]) =>
+    fill(nav, h("h2", {}, "Settings"), ...settingsPages().map(([id, label, ic]) =>
       h("button", { type: "button", class: id === at ? "on" : "", "aria-current": id === at ? "page" : null, onclick: () => { at = id; draw(); } }, icon(ic, 16), h("span", { class: "set-nav-label" }, label), phone ? icon("chevron", 14) : null)));
     win.classList.toggle("at-page", !!at);
     if (phone && !at) {
@@ -3911,7 +3915,7 @@ function openSettings(page = null) {
       nav.prepend(h("div", { class: "set-bar" }, h("button", { class: "icon", type: "button", "aria-label": "Close", onclick: () => close() }, icon("x", 18))));
       return;
     }
-    const [, title] = SETTINGS_PAGES.find(([id]) => id === at);
+    const [, title] = settingsPages().find(([id]) => id === at);
     fill(body, 
       h("div", { class: "set-top" },
         phone ? h("button", { class: "icon", type: "button", "aria-label": "Back to Settings", onclick: () => { at = null; draw(); } }, icon("chevronLeft", 18)) : null,
