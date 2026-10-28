@@ -59,8 +59,14 @@
     } else {
       Step "Downloading B5 Code into $Dir..."
       New-Item -ItemType Directory -Force -Path (Split-Path $Dir) | Out-Null
-      git clone --quiet $Repo $Dir
-      if ($LASTEXITCODE -ne 0) { throw 'B5 Code could not be downloaded from GitHub.' }
+      # A folder left by an install that stopped partway (it has no .git): put aside, or git refuses to use it.
+      if (Test-Path $Dir) { Move-Item $Dir ($Dir + ' (unfinished ' + (Get-Date -Format 'yyyyMMdd-HHmmss') + ')') }
+      # No account is needed: the repository is public. git's own words are shown if it fails.
+      $out = git clone $Repo $Dir 2>&1 | Out-String
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host $out.Trim() -ForegroundColor DarkGray
+        throw 'B5 Code could not be downloaded from GitHub (git said the above). Check the internet connection, then run this again.'
+      }
     }
 
     Step 'Setting up B5 Code (this takes a minute the first time)...'
