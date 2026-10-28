@@ -1,0 +1,2 @@
+# Windows reads batch files best with Windows line endings.
+*.cmd text eol=crlf

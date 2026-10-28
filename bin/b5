@@ -1,0 +1,68 @@
+#!/bin/bash
+# Opens B5 Code: starts its server if it isn't running, then opens it in Safari.
+# Used by B5 Code.app (the Dock icon) and from the terminal as `b5`.
+# `b5 stop` stops the server; `b5 restart` restarts it.
+
+# Follow symlinks by hand: `readlink -f` only exists from macOS 12.3.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in /*) SELF="$TARGET" ;; *) SELF="$(dirname "$SELF")/$TARGET" ;; esac
+done
+B5_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+PORT="${B5_PORT:-4317}"
+URL="http://localhost:$PORT"
+LOG="$B5_DIR/data/b5.log"
+
+# An app launched from the Dock gets a bare PATH; B5 Code needs node and claude.
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+
+running() { curl -s -o /dev/null --max-time 1 "$URL/"; }
+
+# Only this copy's server, by its full path (escaped, since it goes into a
+# regular expression): never another project's `node server/index.js`.
+PATTERN="(^|/)node $(printf '%s' "$B5_DIR" | sed 's/[][\.*^$+?(){}|]/\\&/g')/server/index\.js\$"
+
+stop() {
+  pkill -f "$PATTERN" 2>/dev/null
+  # Wait for the process itself to go, not just the page: it also holds the
+  # preview port, and a new server can't start until both are free.
+  for _ in $(seq 1 30); do pgrep -f "$PATTERN" >/dev/null || return 0; sleep 0.2; done
+  pkill -9 -f "$PATTERN" 2>/dev/null
+}
+
+case "$1" in
+  stop) stop; echo "B5 Code stopped."; exit 0 ;;
+  restart) stop ;;
+esac
+
+if ! running; then
+  mkdir -p "$B5_DIR/data"
+  # One starter at a time: the Dock app and a terminal `b5` can fire together.
+  LOCK="$B5_DIR/data/.starting"
+  # A lock left by a starter that was killed (or a Mac that lost power) would
+  # block every start after it: one whose starter is gone, or older than a
+  # minute, is cleared.
+  if [ -d "$LOCK" ]; then
+    OWNER="$(cat "$LOCK/pid" 2>/dev/null)"
+    if [ -z "$OWNER" ] || ! kill -0 "$OWNER" 2>/dev/null || [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rm -rf "$LOCK"
+    fi
+  fi
+  if mkdir "$LOCK" 2>/dev/null; then
+    echo $$ > "$LOCK/pid"
+    trap 'rm -rf "$LOCK"' EXIT
+    # The server alone goes in the background (not a copy of this script around it).
+    if ! pgrep -f "$PATTERN" >/dev/null; then nohup node "$B5_DIR/server/index.js" >> "$LOG" 2>&1 & fi
+  fi
+  for _ in $(seq 1 40); do running && break; sleep 0.25; done
+fi
+
+if ! running; then
+  osascript -e 'display alert "B5 Code could not start" message "See b5code/data/b5.log for the reason."' >/dev/null 2>&1
+  echo "B5 Code could not start. See $LOG" >&2
+  exit 1
+fi
+
+# --no-open anywhere (`b5 --no-open`, `b5 restart --no-open`) leaves Safari alone.
+case " $* " in *" --no-open "*) ;; *) open -a Safari "$URL" ;; esac

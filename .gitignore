@@ -1,0 +1,11 @@
+# Your projects, threads and their history stay on this Mac.
+data/
+*.log
+.DS_Store
+node_modules/
+# The Windows app, built on each PC (windows/build.mjs).
+windows/bin/
+.playwright-mcp/
+# Notes and mockups for working on B5 Code here, not published.
+HANDOFF.md
+docs/

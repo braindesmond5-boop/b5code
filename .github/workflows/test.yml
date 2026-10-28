@@ -1,0 +1,33 @@
+# The tests on a Mac and on Windows, and on Windows the app built and B5 Code started for real.
+name: Test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm test
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm test
+      - name: Build the app
+        run: node windows/build.mjs
+      - name: Start B5 Code and use it
+        run: node .github/windows-smoke.mjs
+      - name: Keep the picture of the app
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: windows-app, path: windows-app.png, if-no-files-found: ignore }
