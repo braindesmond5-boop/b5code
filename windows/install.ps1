@@ -24,7 +24,8 @@
     $local = Join-Path $env:USERPROFILE '.local\bin'
     if ((Test-Path $local) -and ($env:Path -notlike "*$local*")) { $env:Path += ";$local" }
   }
-  function Winget($id, $name) {
+  # Not called Winget: PowerShell ignores case, so that would be `winget` itself and call itself forever.
+  function InstallWith-Winget($id, $name) {
     if (-not (Has 'winget')) { throw "$name is needed. Install it, then run this again." }
     winget install --id $id --exact --source winget --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { throw "$name didn't install (winget said $LASTEXITCODE)." }
@@ -38,12 +39,12 @@
 
     Step 'Checking what B5 Code needs...'
     if (-not (Has 'git')) {
-      if (Yes 'Git is needed (Claude Code uses it too). Install it now?') { Winget 'Git.Git' 'Git' } else { throw 'Install Git from https://git-scm.com, then run this again.' }
+      if (Yes 'Git is needed (Claude Code uses it too). Install it now?') { InstallWith-Winget 'Git.Git' 'Git' } else { throw 'Install Git from https://git-scm.com, then run this again.' }
     }
     $nodeOk = $false
     if (Has 'node') { $nodeOk = [int]((node -v) -replace '^v(\d+).*', '$1') -ge 20 }
     if (-not $nodeOk) {
-      if (Yes 'Node.js 20 or newer is needed. Install it now?') { Winget 'OpenJS.NodeJS.LTS' 'Node.js' } else { throw 'Install Node.js from https://nodejs.org, then run this again.' }
+      if (Yes 'Node.js 20 or newer is needed. Install it now?') { InstallWith-Winget 'OpenJS.NodeJS.LTS' 'Node.js' } else { throw 'Install Node.js from https://nodejs.org, then run this again.' }
     }
     if (-not (Has 'claude')) {
       if (Yes 'Claude Code is needed. Install it now (Anthropic''s installer)?') { Invoke-RestMethod https://claude.ai/install.ps1 | Invoke-Expression; RefreshPath }
