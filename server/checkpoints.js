@@ -25,7 +25,8 @@ function run(root, args, { env = {}, timeout = 60000 } = {}) {
 
 /** The top folder of the repository `dir` is in, or null. */
 export async function repoRoot(dir) {
-  try { return (await run(dir, ["rev-parse", "--show-toplevel"], { timeout: 5000 })).trim() || null; } catch { return null; }
+  // Git writes C:/Users/me/repo on Windows: made into the path form the rest of B5 Code uses.
+  try { const top = (await run(dir, ["rev-parse", "--show-toplevel"], { timeout: 5000 })).trim(); return top ? path.normalize(top) : null; } catch { return null; }
 }
 
 const refName = (threadId, name) => `refs/b5/${threadId}/${name}`;

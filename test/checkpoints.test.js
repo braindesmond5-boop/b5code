@@ -22,7 +22,8 @@ const read = (root, f) => fs.readFileSync(path.join(root, f), "utf8");
 test("a rewind puts back what changed, removes what was added, and can itself be undone", async () => {
   const r = repo();
   try {
-    assert.equal(await repoRoot(r.root), r.root);
+    // The same folder, however it's spelled (Windows: C:/Users/RUNNER~1 or C:\\Users\\runneradmin).
+    assert.equal(fs.realpathSync.native(await repoRoot(r.root)), fs.realpathSync.native(r.root));
     assert.equal(await repoRoot(os.tmpdir()), null, "not a repository");
     const pre = await snapshot(r.root, r.index, "t1", "1-pre");
 
@@ -57,15 +58,15 @@ test("a rewind puts back what changed, removes what was added, and can itself be
   } finally { r.done(); }
 });
 
-test("a file you changed yourself between turns comes back too, and paths with odd names work", async () => {
+test("a file you changed yourself between turns comes back too, and paths with spaces, brackets and accents work", async () => {
   const r = repo();
   try {
-    fs.writeFileSync(path.join(r.root, "café [plan] *.md"), "v1");
+    fs.writeFileSync(path.join(r.root, "café [plan] x.md"), "v1");
     const pre = await snapshot(r.root, r.index, "t2", "1-pre");
-    fs.writeFileSync(path.join(r.root, "café [plan] *.md"), "v2");
+    fs.writeFileSync(path.join(r.root, "café [plan] x.md"), "v2");
     fs.writeFileSync(path.join(r.root, "a.txt"), "mine\n");
     await restore(r.root, r.index, "t2", pre, "undo-1");
-    assert.equal(read(r.root, "café [plan] *.md"), "v1");
+    assert.equal(read(r.root, "café [plan] x.md"), "v1");
     assert.equal(read(r.root, "a.txt"), "one\n");
   } finally { r.done(); }
 });
