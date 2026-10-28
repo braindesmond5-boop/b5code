@@ -16,7 +16,8 @@ const NAMED = { GIT_AUTHOR_NAME: "B5 Code", GIT_AUTHOR_EMAIL: "b5code@localhost"
 
 function run(root, args, { env = {}, timeout = 60000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile("git", ["-C", root, ...args], { timeout, maxBuffer: 16 << 20, env: { ...process.env, ...NAMED, ...env }, windowsHide: true }, (err, out, stderr) => {
+    // No line-ending conversion: a file comes back byte for byte (Git for Windows would turn LF into CRLF on the way out).
+    execFile("git", ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false", "-C", root, ...args], { timeout, maxBuffer: 16 << 20, env: { ...process.env, ...NAMED, ...env }, windowsHide: true }, (err, out, stderr) => {
       if (err) reject(Object.assign(new Error(String(stderr || err.message).trim().split("\n")[0]), { code: err.code }));
       else resolve(out);
     });

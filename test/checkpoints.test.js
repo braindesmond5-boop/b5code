@@ -101,3 +101,18 @@ test("checkpoints are kept under refs/b5 and let go with the thread; one that's 
     assert.equal(await snapshotSoon("/no/such/folder", r.index, "t6", "x"), null, "no folder: no checkpoint, and no error");
   } finally { r.done(); }
 });
+
+test("files come back byte for byte: CRLF stays CRLF and LF stays LF, whatever git's settings", async () => {
+  const r = repo();
+  try {
+    r.git("config", "core.autocrlf", "true");
+    fs.writeFileSync(path.join(r.root, "dos.txt"), "a\r\nb\r\n");
+    fs.writeFileSync(path.join(r.root, "unix.txt"), "a\nb\n");
+    const pre = await snapshot(r.root, r.index, "t7", "1-pre");
+    fs.writeFileSync(path.join(r.root, "dos.txt"), "changed");
+    fs.writeFileSync(path.join(r.root, "unix.txt"), "changed");
+    await restore(r.root, r.index, "t7", pre, "undo-1");
+    assert.equal(read(r.root, "dos.txt"), "a\r\nb\r\n");
+    assert.equal(read(r.root, "unix.txt"), "a\nb\n");
+  } finally { r.done(); }
+});

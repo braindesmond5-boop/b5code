@@ -208,5 +208,6 @@ setInterval(() => {}, 1000);`);
   await new Promise((r) => setTimeout(r, 400));
   assert.match(fs.readFileSync(log, "utf8"), /third/);
   s.close({ now: true }); s2.close({ now: true });
-  fs.rmSync(dir, { recursive: true, force: true });
+  await new Promise((r) => setTimeout(r, 300));
+  try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); } catch { /* Windows may still hold the folder a moment: the temp folder is left */ }
 });
