@@ -91,6 +91,31 @@ export function apply(feed, ev) {
       feed.resumeAt = ev.resumeAt;
       break;
 
+    // A thread carried on with another agent at a limit (server/index.js): offered, cancelled, or done.
+    case "handoff_offer":
+      finishLive(feed);
+      for (const it of feed.items) {
+        if (it.type === "handoff" && it.state === "offer") it.state = "replaced";
+        if (it.type === "limit" && it.state === "waiting") { it.state = "replaced"; it.byHandoff = true; } // the offer says when the limit resets
+      }
+      feed.items.push({ type: "handoff", state: "offer", from: ev.from, to: ev.to, fromName: ev.fromName, toName: ev.toName, at: ev.at, resetAt: ev.resetAt || 0 });
+      break;
+
+    case "handoff_cancel": {
+      const it = [...feed.items].reverse().find((x) => x.type === "handoff" && x.state === "offer");
+      if (it) { it.state = "cancelled"; it.resetAt = ev.resetAt || it.resetAt; }
+      // Staying put: the thread carries on at its reset as before, so that wait is shown again.
+      const wait = [...feed.items].reverse().find((x) => x.type === "limit" && x.byHandoff);
+      if (wait) { wait.state = "waiting"; wait.byHandoff = false; }
+      break;
+    }
+
+    case "handoff_done": {
+      const it = [...feed.items].reverse().find((x) => x.type === "handoff" && x.state === "offer");
+      if (it) { it.state = "done"; it.how = ev.how; } else feed.items.push({ type: "handoff", state: "done", from: ev.from, to: ev.to, fromName: ev.fromName, toName: ev.toName, how: ev.how, at: ev.at || Date.now() });
+      break;
+    }
+
     case "limit_cleared": {
       const it = [...feed.items].reverse().find((x) => x.type === "limit" && x.state === "waiting");
       if (it) { it.state = ev.why || "cancelled"; if (ev.detail) it.detail = ev.detail; }
@@ -434,7 +459,7 @@ const TOOL_WORDS = { Read: "a file", Edit: "an edit", Write: "a file", Bash: "a 
  * starting up, waiting for the model, thinking, getting a tool ready,
  * running it, or writing. Empty when nothing is happening.
  */
-export function currentStep(feed) {
+export function currentStep(feed, who = "Claude") {
   const l = feed.items[feed.items.length - 1];
   const running = l?.type === "steps" ? [...l.steps].reverse().find((s) => s.state === "run") : null;
   const p = feed.phase;
@@ -442,8 +467,8 @@ export function currentStep(feed) {
   if (running && (!p || p.phase === "tool" || p.phase === "waiting")) return running.summary;
   if (!p) return l?.type === "ai" && l.live ? "Writing" : "";
   switch (p.phase) {
-    case "starting": return "Starting Claude Code";
-    case "waiting": return "Waiting for Claude";
+    case "starting": return `Starting ${who === "Claude" ? "Claude Code" : who}`;
+    case "waiting": return `Waiting for ${who}`;
     case "thinking": return "Thinking";
     case "tool": return `Getting ${TOOL_WORDS[p.tool] || (p.tool ? p.tool.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ") : "a tool")} ready`;
     case "writing": return "Writing";

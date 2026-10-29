@@ -132,6 +132,9 @@ const S = {
   projects: [], threads: [], running: {}, commands: {}, account: null, models: [], usage: null,
   newModel: store.get("newModel", null), // model for threads not yet started
   newEffort: store.get("newEffort", null), // effort for threads not yet started
+  providers: [], // the agents a thread can run on, each with its models (server: GET /api/providers)
+  newProvider: store.get("newProvider", "claude"), // the agent for threads not yet started
+  newAgentModel: store.get("newAgentModel", null), // its model, when that agent isn't Claude
   newBranch: null, // { kind, issue, what } when the next new thread gets its own branch
   pr: {}, // threadId -> { pr, prompt, removed, loading, error } for threads on their own branch
   git: {}, // threadId -> where its folder stands in git (server: gitState), for the next-step buttons
@@ -197,6 +200,7 @@ async function loadState() {
   S.recipes = s.recipes || [];
   S.automations = s.automations || [];
   S.models = s.models || []; S.usage = s.usage || S.usage; S.planUsage = s.planUsage || S.planUsage;
+  refreshProviders();
   // A restarted server has a new preview secret: links made before are dead.
   if ((s.previewBase || "") !== S.previewBase) S.previewLinks = {};
   S.previewBase = s.previewBase || ""; S.home = s.home || ""; S.platform = s.platform || "mac";
@@ -246,6 +250,7 @@ async function openThread(id) {
 let warmedKey = "";
 function warm() {
   const t = thread();
+  if (!t && agentOf(null) !== "claude") return; // another agent has no spare to start ahead
   const key = t ? "t:" + t.id : "p:" + S.projectId + ":" + (newModel() || "");
   // A thread on its own branch can't use the project's spare, so none is started for it.
   if (key === warmedKey || (t && S.running[t.id] === "working") || (!t && S.newBranch)) return;
@@ -374,11 +379,18 @@ function connect() {
       if (S.paneTab === "files" && t?.projectId === S.projectId) paneView?.files.refresh();
       notify(threadId, "Finished");
     }
-    if (event.kind === "permission") notify(threadId, "Claude is asking: " + event.summary);
+    if (event.kind === "permission") notify(threadId, `${who(S.threads.find((x) => x.id === threadId))} is asking: ${event.summary}`);
     if (event.kind === "account") {
       const t = S.threads.find((x) => x.id === threadId);
       if (t) t.account = event.to;
       if (event.why === "limit") notify(threadId, `Moved to ${event.toName}: ${event.fromName} reached its usage limit`);
+    }
+    // A thread carried on with another agent: the page's copy of it moves too, so the chip, the sidebar and the controls follow at once.
+    if (event.kind === "handoff_done") {
+      const t = S.threads.find((x) => x.id === threadId);
+      if (t) Object.assign(t, { provider: event.to, handoffFrom: event.from, sessionId: null, model: undefined, modelPref: event.modelPref ?? null, resume: null });
+      if (threadId === S.threadId && view) updateComposer(feedOf(threadId));
+      scheduleRender();
     }
     if (event.kind === "limit" || event.kind === "limit_cleared") {
       const t = S.threads.find((x) => x.id === threadId);
@@ -897,6 +909,7 @@ function renderRow(t) {
     h("span", { class: "status-ic " + st, title: st === "needs" ? "Needs your answer" : st === "working" ? "Working" : "" },
       st === "working" ? h("span", { class: "spinner" }) : st === "needs" ? h("span", { class: "needs" }) : null),
     h("button", { type: "button", class: "title", style: "text-align:left;height:100%", onclick: () => openThread(t.id), title: t.title }, t.title),
+    multiAgent() && !t.sideOf ? h("span", { class: "agent-tag", title: `Runs on ${agentName(agentOf(t))}` }, agentOf(t) === "claude" ? "Claude" : agentName(agentOf(t))) : null,
     t.resume ? h("span", { class: "when", title: `Carries on ${resumeLabel(t.resume.at)}, when the usage limit resets` }, icon("clock", 12)) : h("span", { class: "when" }, ago(t.updatedAt)),
     h("button", { class: "del", type: "button", title: t.sideOf ? "Delete side chat" : "Delete thread", "aria-label": `Delete ${t.title}`, onclick: () => confirmDelete(t) }, icon("x", 13)));
 }
@@ -1015,9 +1028,9 @@ function renderMainInner(main) {
     else if (p?.kind === "chat") fill(v.hello, ...chatHello());
     else fill(v.hello, 
       h("h1", {}, p ? `What are we working on in ${p.name}?` : "What are we working on?"),
-      h("p", {}, !p ? "" : t?.branch ? `Claude works in ${home(t.dir)}, on its own branch ${t.branch}. Type / for skills and commands.`
-        : !t && S.newBranch ? `Claude will work on a new branch, ${newBranchName()}, in its own worktree. Type / for skills and commands.`
-          : `Claude works in ${home(p.dir)}${p.branch ? ` on ${p.branch}` : ""}. Type / for skills and commands.`),
+      h("p", {}, !p ? "" : t?.branch ? `${who(t)} works in ${home(t.dir)}, on its own branch ${t.branch}.${slashHint(t)}`
+        : !t && S.newBranch ? `${who(t)} will work on a new branch, ${newBranchName()}, in its own worktree.${slashHint(t)}`
+          : `${who(t)} works in ${home(p.dir)}${p.branch ? ` on ${p.branch}` : ""}.${slashHint(t)}`),
       ...(!t && p && !S.phone ? [h("button", { class: "btn quiet", type: "button", style: "margin-top:10px", onclick: () => openImport(p) }, icon("terminal", 14), "Continue a conversation from the terminal…")] : []));
   }
   v.working.hidden = !(feed.working && !feed.waiting);
@@ -1420,7 +1433,7 @@ function workingLine() {
 
 function fillWorking(el, feed) {
   const secs = (Date.now() - (feed.startedAt || Date.now())) / 1000;
-  const stage = currentStep(feed);
+  const stage = currentStep(feed, who());
   const stageSecs = phaseSeconds(feed);
   el.querySelector(".verb").textContent = workingVerb(secs, feed.seed || 0) + "…";
   el.querySelector(".meta").textContent = [
@@ -1469,6 +1482,7 @@ function itemSig(it, t) {
   if (it.type === "cp") return `${t?.cpHere || ""}:${it.files.length}`;
   if (it.type === "rewind") return `${canUndoRewind(it, t)}`;
   if (it.type === "limit") return `${it.state}:${it.resumeAt}`;
+  if (it.type === "handoff") return `${it.state}:${it.at}:${it.how || ""}`;
   if (it.type === "recap") return `${S.open.has(recapKey(it))}`;
   if (it.type === "artifact") return `${it.version}:${it.title}:${cardShowing(it)}`;
   if (it.type === "checks") return `${it.status}:${(it.results || []).length}:${S.open.has(it.key)}:${it.answered || ""}:${S.projects.find((p) => p.id === it.projectId)?.checksOn}:${t ? feedOf(t.id).working : ""}`;
@@ -1510,13 +1524,15 @@ function renderItem(it, t) {
       files.length ? h("div", { class: "sent-files" }, ...files.map((f) => /^image\//.test(f.type) && S.previewBase
         ? h("button", { type: "button", class: "sent-img", title: f.name, onclick: () => openPreview(f.path) }, h("img", { src: previewUrl(f.path), alt: f.name }))
         : h("button", { type: "button", class: "file-chip", title: f.path, onclick: () => openPreview(f.path) }, icon("file", 13), h("span", {}, f.name)))) : null,
-      it.text ? h("div", { class: "msg-user" + (it.steer ? " steer" : "") }, it.text) : null,
+      it.text && it.auto === "handoff"
+        ? h("details", { class: "msg-brief" }, h("summary", {}, "The conversation so far, as it was sent"), h("div", { class: "msg-user" }, it.text))
+        : it.text ? h("div", { class: "msg-user" + (it.steer ? " steer" : "") }, it.text) : null,
       it.cp && !it.steer && t?.cps?.some((c) => c.n === it.cp && c.pre)
         ? h("button", { class: "msg-rewind", type: "button", title: "Rewind the files to before this message", "aria-label": "Rewind the files to before this message",
           onclick: () => rewindDialog(t, `${it.cp}-pre`, `before “${shortTitle(it.text)}”`) }, icon("undo", 14)) : null,
       it.steer ? h("div", { class: "msg-tag" + (it.steer === "lost" ? " bad" : "") }, it.steer === "queued" ? "Sent while working · Claude reads it at its next step"
         : it.steer === "taken" ? "Sent while working · Claude has it" : "Sent while working · Claude didn't get it. Send it again.") : null,
-      it.auto ? h("div", { class: "msg-tag" }, it.auto === "switch" ? "Sent by B5 Code on your other account" : it.auto === "queue" ? "Sent by B5 Code's overnight queue"
+      it.auto ? h("div", { class: "msg-tag" }, it.auto === "handoff" ? "Sent by B5 Code to carry on after the usage limit" : it.auto === "switch" ? "Sent by B5 Code on your other account" : it.auto === "queue" ? "Sent by B5 Code's overnight queue"
         : it.auto === "restart" ? "Sent by B5 Code after it restarted for an update"
           : it.auto === "automation" ? "Started by an automation" : "Sent by B5 Code when your usage limit reset") : null);
   }
@@ -1524,6 +1540,7 @@ function renderItem(it, t) {
   if (it.type === "cp") return cpLine(it, t);
   if (it.type === "rewind") return rewindLine(it, t);
   if (it.type === "limit") return limitCard(it, t);
+  if (it.type === "handoff") return handoffCard(it, t);
   if (it.type === "note") return h("div", { class: "note", style: "text-align:center" }, it.text);
   if (it.type === "ai") {
     const el = h("div", { class: "msg-ai" + (it.live ? " live" : ""), html: md(it.text, !it.live) });
@@ -1565,8 +1582,8 @@ function renderItem(it, t) {
       return h("div", { class: "answered" }, h("span", { class: "mark " + (yes ? "ok" : "bad") }, icon(yes ? "check" : "x", 12)), `${label}: ${it.summary}`);
     }
     if (needsReview(it.tool)) return reviewCard(t, it);
-    return h("div", { class: "ask", role: "group", "aria-label": "Claude is asking permission" },
-      h("div", { class: "ask-top" }, h("span", { class: "needs" }), "Claude wants to"),
+    return h("div", { class: "ask", role: "group", "aria-label": `${who(t)} is asking permission` },
+      h("div", { class: "ask-top" }, h("span", { class: "needs" }), `${who(t)} wants to`),
       h("div", { class: "ask-what" }, it.summary),
       it.change ? renderChange(it.change) : it.detail ? h("pre", {}, it.detail) : null,
       h("div", { class: "btns" },
@@ -1715,7 +1732,7 @@ function questionCard(t, it, questions) {
           draw(); ready();
         } },
         h("span", { class: "q-tick" }, icon("check", 11)),
-        h("span", { class: "q-text" }, h("span", { class: "q-label" }, o.label), o.description ? h("span", { class: "q-desc" }, o.description) : null));
+        h("span", { class: "q-text" }, h("span", { class: "q-label" }, o.label), o.description && o.description !== o.label ? h("span", { class: "q-desc" }, o.description) : null));
       rows.push(row);
     }
     return h("div", { class: "q-block", role: q.multiSelect ? "group" : "radiogroup", "aria-label": q.question },
@@ -1731,8 +1748,8 @@ function questionCard(t, it, questions) {
     try { await call("POST", `/api/threads/${t.id}/permission`, { requestId: it.requestId, choice: "allow", answers }); }
     catch (e) { toast(e.message); ready(); }
   };
-  const card = h("div", { class: "ask q-card", role: "group", "aria-label": "Claude has a question" },
-    h("div", { class: "ask-top" }, h("span", { class: "needs" }), questions.length > 1 ? `Claude has ${questions.length} questions` : "Claude has a question"),
+  const card = h("div", { class: "ask q-card", role: "group", "aria-label": `${who(t)} has a question` },
+    h("div", { class: "ask-top" }, h("span", { class: "needs" }), questions.length > 1 ? `${who(t)} has ${questions.length} questions` : `${who(t)} has a question`),
     ...blocks,
     h("div", { class: "btns" }, send, h("button", { class: "btn quiet", type: "button", onclick: () => answer(t.id, it, "deny") }, "Skip")));
   questionCards.set(it.requestId, card);
@@ -1760,7 +1777,7 @@ function buildComposer() {
     if (files.length) { e.preventDefault(); addFiles(files); }
   });
   const send = h("button", { class: "send", id: "send", type: "submit", title: "Send (Enter)", "aria-label": "Send" }, icon("up", 16));
-  return h("div", { class: "composer-wrap" },
+  const wrap = h("div", { class: "composer-wrap" },
     h("div", { class: "todos tasks", id: "tasks", hidden: true }),
     h("div", { class: "todos", id: "todos", hidden: true }),
     h("form", { class: "composer", onsubmit: (e) => { e.preventDefault(); onSendButton(); },
@@ -1781,7 +1798,7 @@ function buildComposer() {
         h("button", { class: "chip", id: "model-chip", type: "button", title: "Model", "aria-haspopup": "menu", onclick: toggleModelMenu }),
         h("button", { class: "chip", id: "effort-chip", type: "button", "aria-haspopup": "menu", onclick: toggleEffortMenu }),
         h("button", { class: "chip", id: "cp-chip", type: "button", hidden: true, "aria-haspopup": "dialog", onclick: toggleCpMenu }),
-        h("button", { class: "chip skills", type: "button", title: "Skills and commands", "aria-label": "Skills and commands", onclick: openSlash }, icon("slash", 13), h("span", {}, "Skills")),
+        h("button", { class: "chip skills", id: "skills-chip", type: "button", title: "Skills and commands", "aria-label": "Skills and commands", onclick: openSlash }, icon("slash", 13), h("span", {}, "Skills")),
         h("button", { class: "chip", id: "where-chip", type: "button", onclick: () => { if (!thread()) pickBranch(); } }),
         h("span", { class: "spacer" }),
         canDictate() ? h("button", { class: "icon mic", id: "mic", type: "button", title: "Dictate (speak your message)", "aria-label": "Dictate", "aria-pressed": "false", onclick: toggleDictation }, icon("mic", 16)) : null,
@@ -1790,6 +1807,20 @@ function buildComposer() {
       h("span", { class: "ctx", id: "ctx", hidden: true }),
       h("span", { class: "ctx acct", id: "acct", hidden: true, role: "button", tabindex: "0" }),
       h("div", { class: "menu-pop acct-menu", id: "acct-menu", hidden: true, role: "menu", "aria-label": "Account" })));
+  watchComposerWidth(wrap.querySelector(".composer"));
+  return wrap;
+}
+
+// How much of the chip row fits depends on the box's own width (the sidebar and the changes pane take the rest of the
+// window), so it's measured here and not by the window's width: first the labels fold into their icons, then Skills
+// steps aside (it's in the + menu, or type /), so Send is never pushed out of the box.
+function watchComposerWidth(box) {
+  if (!box || typeof ResizeObserver === "undefined") return;
+  new ResizeObserver(() => {
+    const w = box.clientWidth;
+    box.classList.toggle("compact", w < 600);
+    box.classList.toggle("tight", w < 470);
+  }).observe(box);
 }
 
 function updateComposer(feed) {
@@ -1818,6 +1849,7 @@ function updateComposer(feed) {
   chip.title = t ? (t.branch ? `On its own branch, in ${home(t.dir)}` : `In ${p ? home(p.dir) : ""}`) : "Where this thread works: the project, or a new branch of its own";
   fill($("model-chip"), h("span", {}, currentModelName()), icon("chevronDown", 12));
   fillEffortChip();
+  $("skills-chip").hidden = agentOf() !== "claude"; // skills and / commands are Claude Code's
   fillCpChip();
   sendButton(feed);
   renderTodos(feed);
@@ -1834,9 +1866,12 @@ function sendButton(feed = thread() ? feedOf(thread().id) : emptyFeed()) {
   const stop = feed.working && !steer;
   send.classList.toggle("stop", stop);
   fill(send, icon(stop ? "stop" : "up", 16));
-  send.title = stop ? "Stop (Esc)" : steer ? "Send now: Claude reads it at its next step" : "Send (Enter)";
+  send.title = stop ? "Stop (Esc)" : steer ? (agentOf() === "claude" ? "Send now: Claude reads it at its next step" : `Send: ${who()} reads it when this turn is done`) : "Send (Enter)";
   send.setAttribute("aria-label", stop ? "Stop" : "Send");
-  $("input").placeholder = feed.working ? (narrow() ? "Steer Claude while it works" : "Steer Claude while it works, or Esc to stop") : thread()?.sideOf ? "Ask about the thread" : "Ask Claude, or / for skills";
+  const claude = agentOf() === "claude";
+  $("input").placeholder = feed.working
+    ? (claude ? (narrow() ? "Steer Claude while it works" : "Steer Claude while it works, or Esc to stop") : "Write the next message, or Esc to stop")
+    : thread()?.sideOf ? "Ask about the thread" : claude ? "Ask Claude, or / for skills" : `Ask ${who()}`;
 }
 
 // Claude's to-do list, pinned above the composer while there's work on it.
@@ -1948,7 +1983,7 @@ function showChange(rel) {
 /** The card while a thread waits out its plan's usage limit. */
 function limitCard(it, t) {
   if (it.state !== "waiting") {
-    const said = { sent: "B5 Code carried on after the usage limit reset.", you: "You carried on yourself.", cancelled: "Not carrying on by itself.", replaced: "Usage limit reached.",
+    const said = { handoff: "Usage limit reached.", sent: "B5 Code carried on after the usage limit reset.", you: "You carried on yourself.", cancelled: "Not carrying on by itself.", replaced: "Usage limit reached.",
       failed: `B5 Code couldn't carry on${it.detail ? `: ${it.detail}` : "."}` }[it.state] || "";
     return h("div", { class: "answered" }, h("span", { class: "mark" }, icon("clock", 12)), said);
   }
@@ -1959,6 +1994,48 @@ function limitCard(it, t) {
     h("div", { class: "btns" },
       h("button", { class: "btn", type: "button", onclick: () => resumeThread(t, "now") }, "Carry on now"),
       h("button", { class: "btn quiet", type: "button", onclick: () => resumeThread(t, "cancel") }, "Don't carry on")));
+}
+
+// Carrying on with another agent at a limit (server/index.js): 30 seconds to cancel, then it starts by itself.
+function handoffCard(it, t) {
+  if (it.state === "done") {
+    const back = it.how === "back";
+    const last = feedOf(t.id).items.findLast?.((x) => x.type === "handoff" && x.state === "done") === it;
+    return h("div", { class: "answered handoff-line" }, h("span", { class: "mark ok" }, icon("check", 12)),
+      h("span", {},
+        back ? `Switched back to ${it.toName}.` : `${it.fromName} reached its usage limit. Carried on with ${it.toName}, given the conversation so far.`,
+        last && t.handoffFrom && (t.provider || "claude") === it.to
+          ? h("button", { class: "link-btn", type: "button", onclick: () => handoffAct(t, "back") }, `Switch back to ${agentName(t.handoffFrom)}`) : null));
+  }
+  if (it.state === "cancelled") {
+    return h("div", { class: "answered handoff-line" }, h("span", { class: "mark" }, icon("clock", 12)),
+      `You cancelled. Staying on ${it.fromName}${it.resetAt ? `; it carries on ${resumeLabel(it.resetAt)}` : ""}.`);
+  }
+  if (it.state !== "offer") return h("div", { class: "answered handoff-line" }, h("span", { class: "mark" }, icon("clock", 12)), `${it.fromName} reached its usage limit.`);
+  const left = () => Math.max(0, Math.ceil((it.at - Date.now()) / 1000));
+  const what = (n) => `${it.resetAt ? `Its limit resets ${resumeLabel(it.resetAt)}. ` : ""}${n > 0 ? `${it.toName} carries on from here in ${n} s` : `Starting ${it.toName}`}, given your messages, its replies and the files changed so far.`;
+  const text = h("div", { class: "ask-what" }, what(left()));
+  const bar = h("i", { style: `width:${Math.min(100, (left() / 30) * 100)}%` });
+  const card = h("div", { class: "ask limit-card handoff-card", role: "group", "aria-label": `${it.fromName} reached its usage limit` },
+    h("div", { class: "ask-top" }, icon("clock", 14), `${it.fromName} reached its usage limit`),
+    text,
+    h("div", { class: "hand-bar", "aria-hidden": "true" }, bar),
+    h("div", { class: "btns" },
+      h("button", { class: "btn primary", type: "button", onclick: () => handoffAct(t, "now") }, "Carry on now"),
+      h("button", { class: "btn", type: "button", onclick: () => handoffAct(t, "cancel") }, "Cancel")));
+  // The countdown only draws what the server is doing: the offer starts by itself at `at`, page open or not.
+  const tick = setInterval(() => {
+    if (!card.isConnected && Date.now() > it.at + 60000) return clearInterval(tick);
+    const n = left();
+    text.textContent = what(n);
+    bar.style.width = `${Math.min(100, (n / 30) * 100)}%`;
+    if (!n) clearInterval(tick);
+  }, 250);
+  return card;
+}
+
+async function handoffAct(t, action) {
+  try { await call("POST", `/api/threads/${t.id}/handoff`, { action }); } catch (e) { toast(e.message); }
 }
 
 async function resumeThread(t, action) {
@@ -2014,11 +2091,56 @@ async function openImport(p) {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 function chosenModel(t = thread()) {
+  if (agentOf(t) !== "claude") return t ? t.modelPref || null : S.newAgentModel;
   return t ? t.modelPref || null : newModel();
+}
+
+// ── Agents ───────────────────────────────────────────────────────────────────
+// A thread runs on one agent, chosen when it starts: Claude Code, or another
+// that's installed (OpenCode). The model menu is where it's picked.
+
+const installedAgents = () => S.providers.filter((p) => p.installed);
+/** Whether there is a choice: another agent besides Claude is installed. Until then nothing about agents shows. */
+const multiAgent = () => installedAgents().length > 1;
+const providerById = (id) => S.providers.find((p) => p.id === id);
+const AGENT_NAMES = { claude: "Claude Code", opencode: "OpenCode" }; // until the list has loaded
+const agentName = (id) => providerById(id)?.name || AGENT_NAMES[id] || id;
+/** Chat and Work spaces are built on Claude's own tools; only Code threads can use another agent. */
+const canPickAgent = () => !["chat", "work"].includes(project()?.kind);
+/** The agent a thread runs on; a new thread's is the one picked in the menu, or Claude when that one isn't there. */
+function agentOf(t = thread()) {
+  const id = t ? t.provider || "claude" : canPickAgent() ? S.newProvider : "claude";
+  // Until the list has loaded, the choice stands: a thread started now must not quietly fall back to Claude.
+  return id === "claude" || !providersLoaded || providerById(id)?.installed ? id : "claude";
+}
+
+/** "opencode/big-pickle" as "Big Pickle", for a model the list hasn't named (yet). */
+const readable = (v) => v.split("/").pop().replace(/-free$/, "").split(/[-_]/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
+
+/** What the page calls the agent a thread runs on in a sentence: Claude, or the other's name. */
+const who = (t = thread()) => (agentOf(t) === "claude" ? "Claude" : agentName(agentOf(t)));
+/** The / menu of skills and commands is Claude Code's. */
+const slashHint = (t) => (agentOf(t) === "claude" ? " Type / for skills and commands." : "");
+
+let providersLoaded = false, providersFailed = false;
+let providersLoading = Promise.resolve();
+const refreshProviders = () => (providersLoading = loadProviders());
+
+async function loadProviders() {
+  let list;
+  try { list = (await call("GET", "/api/providers")).providers || []; } catch { providersFailed = true; if ($("model-menu") && !$("model-menu").hidden) fillModelMenu(); return; }
+  providersLoaded = true; providersFailed = false;
+  const same = JSON.stringify(list) === JSON.stringify(S.providers);
+  S.providers = list;
+  if ($("model-menu") && !$("model-menu").hidden) fillModelMenu(); // opened while it was still loading
+  if (same) return;
+  scheduleRender();
+  if (view) updateComposer(S.threadId ? feedOf(S.threadId) : emptyFeed());
 }
 
 // A new thread's model: Chat has its own default (Settings › Chat); everywhere else the last one you picked.
 function newModel() {
+  if (agentOf(null) !== "claude") return S.newAgentModel;
   return project()?.kind === "chat" ? SET.chatModel || null : S.newModel;
 }
 
@@ -2032,6 +2154,11 @@ function settingModel() {
 }
 
 function currentModelName(t = thread()) {
+  const ag = agentOf(t);
+  if (ag !== "claude") {
+    const value = chosenModel(t), m = providerById(ag)?.models.find((x) => x.value === value);
+    return `${agentName(ag)} · ${m ? m.name : value ? readable(value) : "Default"}`;
+  }
   const pick = chosenModel(t);
   const m = pick && S.models.find((x) => x.value === pick);
   if (m) return m.name;
@@ -2062,22 +2189,84 @@ function modelChoices(t = thread()) {
 function toggleModelMenu() {
   const menu = $("model-menu");
   if (!menu.hidden) { menu.hidden = true; return; }
-  const { pick, all, latest } = modelChoices();
-  const showAll = menu.dataset.all === "1" || !latest.some((m) => m.value === pick);
-  const list = showAll ? all : latest;
-  fill(menu, ...list.map((m) => h("button", {
-    type: "button", role: "menuitemradio", "aria-checked": String(m.value === pick), class: m.value === pick ? "on" : "",
-    onclick: () => chooseModel(pickFor(m, all)),
-  }, h("span", { class: "tick" }, m.value === pick ? icon("check", 14) : null),
-  h("span", {}, h("div", { class: "m-name" }, m.name), h("div", { class: "m-desc" }, m.description)))));
-  if (!S.models.length) menu.append(h("div", { class: "note", style: "padding:6px 10px" }, "More models appear after this project's first message."));
-  else if (!showAll && all.length > latest.length) {
-    menu.append(h("button", { type: "button", class: "more", onclick: (e) => { e.stopPropagation(); menu.dataset.all = "1"; menu.hidden = true; toggleModelMenu(); } },
-      h("span", { class: "tick" }), h("span", { class: "m-desc" }, `Older models (${all.length - latest.length})`)));
-  }
+  refreshProviders(); // one installed since the page loaded shows up on the next open
+  fillModelMenu();
   menu.hidden = false;
   const close = (e) => { if (!menu.contains(e.target) && e.target !== $("model-chip") && !$("model-chip").contains(e.target)) { menu.hidden = true; document.removeEventListener("mousedown", close); } };
   document.addEventListener("mousedown", close);
+}
+
+// One menu for every agent: a heading and its models each. A thread keeps the
+// agent it started on, so it shows only that one; a new thread shows them all,
+// with any that isn't installed below, greyed, and the command to install it.
+function fillModelMenu() {
+  const menu = $("model-menu");
+  const t = thread(), ag = agentOf(t), heads = multiAgent();
+  const ids = t ? [ag] : canPickAgent() ? installedAgents().map((p) => p.id) : ["claude"];
+  const kids = [];
+  ids.forEach((id, i) => {
+    if (i) kids.push(h("hr"));
+    if (heads) kids.push(agentHead(id));
+    kids.push(...(id === "claude" ? claudeItems(menu, t, ag === "claude") : agentItems(id, t, ag === id)));
+  });
+  if (!t && canPickAgent()) for (const p of S.providers.filter((x) => !x.installed)) kids.push(h("hr"), agentHead(p.id, true), installRow(p));
+  if (t && heads) kids.push(h("hr"), h("div", { class: "m-foot" }, `This thread runs on ${agentName(ag)}. To use another agent, start a new thread.`));
+  fill(menu, ...kids);
+}
+
+const agentHead = (id, off = false) => h("div", { class: "m-head" + (off ? " off" : "") }, h("i", { class: "m-dot " + id }), h("span", {}, agentName(id)), off ? h("span", { class: "m-state" }, "not installed") : null);
+
+function installRow(p) {
+  return h("div", { class: "m-install" },
+    h("code", {}, p.install),
+    h("button", { type: "button", onclick: (e) => { e.stopPropagation(); navigator.clipboard?.writeText(p.install).then(() => toast("Copied. Run it in a terminal, then reopen this menu."), () => toast(p.install)); } }, "Copy"));
+}
+
+// Claude's models: the newest of each family, or every one.
+function claudeItems(menu, t, on) {
+  const { pick, all, latest } = modelChoices(t);
+  const showAll = menu.dataset.all === "1" || (on && !latest.some((m) => m.value === pick));
+  const list = showAll ? all : latest;
+  const out = list.map((m) => {
+    const ticked = on && m.value === pick;
+    return h("button", {
+      type: "button", role: "menuitemradio", "aria-checked": String(ticked), class: ticked ? "on" : "",
+      onclick: () => chooseModel(pickFor(m, all)),
+    }, h("span", { class: "tick" }, ticked ? icon("check", 14) : null),
+    h("span", {}, h("div", { class: "m-name" }, m.name), h("div", { class: "m-desc" }, m.description)));
+  });
+  if (!S.models.length) out.push(h("div", { class: "note", style: "padding:6px 10px" }, "More models appear after this project's first message."));
+  else if (!showAll && all.length > latest.length) {
+    out.push(h("button", { type: "button", class: "more", onclick: (e) => { e.stopPropagation(); menu.dataset.all = "1"; fillModelMenu(); } },
+      h("span", { class: "tick" }), h("span", { class: "m-desc" }, `Older models (${all.length - latest.length})`)));
+  }
+  return out;
+}
+
+function agentItems(id, t, on) {
+  const list = providerById(id)?.models || [];
+  if (!list.length) return [h("div", { class: "note", style: "padding:6px 10px" }, providersFailed ? "Couldn't load this agent's models." : providersLoaded ? "No models found. Sign in to a provider in OpenCode." : "Loading models…")];
+  const pick = chosenModel(t);
+  return list.map((m) => {
+    const ticked = on && m.value === pick;
+    return h("button", { type: "button", role: "menuitemradio", "aria-checked": String(ticked), class: ticked ? "on" : "", onclick: () => chooseAgentModel(id, m.value) },
+      h("span", { class: "tick" }, ticked ? icon("check", 14) : null),
+      h("span", {}, h("div", { class: "m-name" }, m.name, m.free ? h("span", { class: "m-free" }, "free") : null), h("div", { class: "m-desc" }, m.description)));
+  });
+}
+
+async function chooseAgentModel(id, value) {
+  $("model-menu").hidden = true;
+  const t = thread();
+  if (t) {
+    t.modelPref = value;
+    try { await call("POST", `/api/threads/${t.id}/model`, { model: value }); } catch (e) { toast(e.message); }
+  } else {
+    S.newProvider = id; S.newAgentModel = value;
+    store.set("newProvider", id); store.set("newAgentModel", value);
+  }
+  updateComposer(t ? feedOf(t.id) : emptyFeed());
+  toast(`Model: ${currentModelName()}`);
 }
 
 // Claude Code's "Default" entry names a model (Sonnet 5.5, say), but running
@@ -2093,6 +2282,8 @@ function pickFor(m, all) {
 async function chooseModel(value) {
   $("model-menu").hidden = true;
   const t = thread();
+  if (t && agentOf(t) !== "claude") return toast(`This thread runs on ${agentName(agentOf(t))}. To use a Claude model, start a new thread.`);
+  if (!t && S.newProvider !== "claude") { S.newProvider = "claude"; store.set("newProvider", "claude"); }
   if (t) {
     t.modelPref = value;
     try { await call("POST", `/api/threads/${t.id}/model`, { model: value }); } catch (e) { toast(e.message); }
@@ -2127,6 +2318,7 @@ const effortBars = (id) => { const n = EFFORTS.findIndex((x) => x.id === id) + 1
 function fillEffortChip() {
   const chip = $("effort-chip");
   if (!chip) return;
+  chip.hidden = agentOf() !== "claude"; // only Claude has a thinking-effort setting
   const e = effortOf(currentEffort());
   fill(chip, effortBars(e?.id), h("span", { class: "effort-name" }, e ? e.name : "Effort"));
   chip.title = e ? `Effort: ${e.name}. How hard Claude thinks.` : "Effort: how hard Claude thinks. Now your Claude Code setting.";
@@ -2554,7 +2746,8 @@ async function sendNow() {
   try {
     if (!t) {
       if (S.newBranch) toast(`Making the branch ${newBranchName()}…`);
-      t = await call("POST", "/api/threads", { projectId: S.projectId, model: newModel(), effort: S.newEffort, branch: S.newBranch });
+      await providersLoading; // the agent chosen for it is settled before the thread is made
+      t = await call("POST", "/api/threads", { projectId: S.projectId, model: newModel(), effort: agentOf(null) === "claude" ? S.newEffort : undefined, branch: S.newBranch, provider: agentOf(null) !== "claude" ? agentOf(null) : undefined });
       S.newBranch = null;
       S.threads.unshift(t);
       S.feeds.set(t.id, emptyFeed());
@@ -4009,7 +4202,8 @@ const SETTINGS_BUILD = {
   code: () => [
     setGroup("While Claude works",
       serverToggle("keepAwake", `Keep the ${MAC()} awake`, `Stops the ${MAC()} going to sleep while a thread is working, so a long job isn't paused. Closing a laptop's lid still sleeps it.`),
-      serverToggle("autoResume", "Carry on after a usage limit", "When a thread stops because your plan's limit is reached, B5 Code sends it on its way again once the limit resets.")),
+      serverToggle("autoResume", "Carry on after a usage limit", "When a thread stops because your plan's limit is reached, B5 Code sends it on its way again once the limit resets."),
+      multiAgent() ? serverToggle("agentHandoff", "Carry on with another agent at a limit", "When an agent reaches its limit and none of your Claude accounts is free, B5 Code offers the next agent that isn't at its limit. You have 30 seconds to cancel; then it starts by itself.") : null),
     setGroup("New threads",
       setRow("Model", "What a new thread starts with. Each thread can change its own.", modelSelect(S.newModel, (v) => { S.newModel = v; store.set("newModel", v); warmedKey = ""; })),
       setRow("Free checks after each change", "Tests, typecheck and lint run by themselves after Claude edits files. Turned on for each project, in its settings (the gear beside its name).")),

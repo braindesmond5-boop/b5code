@@ -15,7 +15,7 @@ const TITLE_MAX = 60;
 export const emptyState = () => ({ projects: [], threads: [], settings: { ...SERVER_DEFAULTS } });
 // Settings the server acts on (the page's own look and feel stays in the browser).
 // extraAccounts: more than one Claude account (server/accounts.js), off until you turn it on.
-export const SERVER_DEFAULTS = { keepAwake: true, autoResume: true, autoSwitch: true, autoUpdate: true, chatWeb: true, studioAutostart: true, extraAccounts: false, queueCarryOn: true };
+export const SERVER_DEFAULTS = { keepAwake: true, autoResume: true, autoSwitch: true, autoUpdate: true, chatWeb: true, studioAutostart: true, extraAccounts: false, queueCarryOn: true, agentHandoff: true };
 const newId = () => crypto.randomBytes(6).toString("hex");
 
 export function addProject(state, { name, dir, kind }) {
@@ -118,7 +118,8 @@ export function addSide(state, parentId, now = Date.now()) {
   if (parent.sideOf) throw new Error("A side chat can't have side chats of its own.");
   const { state: next, thread } = addThread(state, parent.projectId, now);
   const side = { ...thread, title: "Side chat", sideOf: parent.id, forkFrom: parent.sessionId || null,
-    ...(parent.dir ? { dir: parent.dir, root: parent.root } : {}), ...(parent.modelPref ? { modelPref: parent.modelPref } : {}) };
+    ...(parent.dir ? { dir: parent.dir, root: parent.root } : {}), ...(parent.modelPref ? { modelPref: parent.modelPref } : {}),
+    ...(parent.provider ? { provider: parent.provider } : {}) }; // forks the parent's own conversation, so it has to be the same agent
   return { state: { ...next, threads: next.threads.map((t) => (t.id === thread.id ? side : t)) }, thread: side };
 }
 
@@ -152,7 +153,7 @@ export class Store {
       const accountsOn = s.accounts?.length && s.settings?.extraAccounts === undefined ? { extraAccounts: true } : {};
       return { projects: s.projects || [], threads: s.threads || [], commands: s.commands || {}, models: s.models || [],
         settings: { ...SERVER_DEFAULTS, ...accountsOn, ...(s.settings || {}) },
-        accounts: s.accounts || [], accountLimits: s.accountLimits || {}, queue: s.queue || { on: false, startAt: 0, seq: 0, tasks: [] },
+        accounts: s.accounts || [], accountLimits: s.accountLimits || {}, agentLimits: s.agentLimits || {}, queue: s.queue || { on: false, startAt: 0, seq: 0, tasks: [] },
         carryOn: s.carryOn || [], // threads a restart cut short, to carry on (server/index.js)
         recipes: s.recipes || [], automations: s.automations || [],
         reviewTools: s.reviewTools || [] }; // connector tools a Work space asks before (server/index.js reviewRules)

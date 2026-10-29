@@ -106,19 +106,30 @@ test("a symlink committed in the worktree can't carry an edit or a read outside 
   assert.equal(queueAllows("Write", { file_path: path.join(w, "src", "new", "file.js") }, w).ok, true, "a file in a folder not made yet");
 });
 
-test("queued tasks run boxed in: Claude Code's sandbox with no way out, and the checks under sandbox-exec", { skip: process.platform === "win32" && "the overnight queue is the Mac's" }, () => {
+test("queued tasks run in Claude Code's sandbox with no way out", { skip: process.platform === "win32" && "the overnight queue is the Mac's" }, () => {
   const s = queueSandboxSettings({ home: "/Users/me", dataDir: "/Users/me/b5/data", projectDir: "/Users/me/app" }).sandbox;
   assert.deepEqual([s.enabled, s.failIfUnavailable, s.allowUnsandboxedCommands, s.autoAllowBashIfSandboxed], [true, true, false, false]);
   assert.deepEqual(s.network.allowedDomains, []);
   assert.ok(s.filesystem.denyRead.includes("/Users/me/.ssh") && s.filesystem.denyRead.includes("/Users/me/b5/data") && s.filesystem.denyRead.includes("/Users/me/app/.env"));
-  // The profile works for real: no network, no writes outside, no secrets; the worktree and node are fine.
+});
+
+// sandbox-exec can't start inside another sandbox (sandbox_apply: Operation not permitted), which is where these tests
+// run when something else (a coding agent, a CI job) has boxed them in: there the real run below can't be tried.
+const sandboxExecWorks = () => {
+  if (process.platform !== "darwin") return false;
+  try { execFileSync("/usr/bin/sandbox-exec", ["-p", "(version 1)(allow default)", "/usr/bin/true"], { stdio: "pipe" }); return true; } catch { return false; }
+};
+const sandboxSkip = process.platform === "win32" ? "the overnight queue is the Mac's" : !sandboxExecWorks() && "sandbox-exec can't start here (these tests are already inside a sandbox, or this isn't a Mac)";
+
+test("the checks run under sandbox-exec: no network, no writes outside, no secrets; the worktree and node are fine", { skip: sandboxSkip }, () => {
   const w = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "b5-sbx-")));
   const outside = path.join(os.homedir(), `.b5-sandbox-test-${process.pid}`);
   const profile = checksSandboxProfile({ worktree: w, home: os.homedir(), dataDir: path.join(w, "data-not-here") });
   const run = (cmd) => { try { execFileSync("/usr/bin/sandbox-exec", ["-p", profile, "/bin/zsh", "-c", cmd], { cwd: w, stdio: "pipe" }); return true; } catch { return false; } };
+  // First that the profile runs things at all: a refusal to start would otherwise make every "must fail" below pass.
+  assert.equal(run("echo hi > inside.txt && node -e 1"), true, "the worktree, and node");
   assert.equal(run("curl -s -m 5 -o /dev/null http://1.1.1.1"), false, "network");
   assert.equal(run(`touch ${outside}`), false, "write outside");
   assert.equal(fs.existsSync(outside), false);
   assert.equal(run("ls ~/.ssh"), false, "read ~/.ssh");
-  assert.equal(run("echo hi > inside.txt && node -e 1"), true, "the worktree, and node");
 });

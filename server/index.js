@@ -17,6 +17,8 @@ import { Store, addProject, addThread, addSide, updateThread, removeThread, titl
 import { cleanTrigger, scheduleDue, nextRun, describeTrigger, newFiles, runText } from "./automations.js";
 import { detectChecks, parseChecks, checksText, checkResult, fixMessage, whatRuns, sortRuns, runKey, sandboxProfile } from "./checks.js";
 import { ClaudeSession } from "./session.js";
+import { PROVIDERS, providerOf, providersWithModels, providerModels, createSession } from "./agents.js";
+import { HANDOFF_MS, isAgentLimit, nextAgent, handoffBrief } from "./handoff.js";
 import { LIVE_ONLY, limitResetAt } from "./events.js";
 import { listSessions, sessionFile, importSession } from "./transcripts.js";
 import { Awake } from "./awake.js";
@@ -162,7 +164,7 @@ const RESUME_TEXT = "Your usage limit has reset. Carry on where you left off.";
 const SWITCH_TEXT = "That account reached its usage limit, so this conversation moved to another Claude account. Carry on where you left off.";
 const LIMIT_RETRY_MS = 30 * 60 * 1000;
 /** A model name as Claude Code takes it (opus, claude-opus-5-5[1m]…), or null: never one that reads as an option. */
-const cleanModel = (m) => (typeof m === "string" && /^[A-Za-z0-9][\w.\-[\]]{0,79}$/.test(m) ? m : null); // the limit stopped it but gave no time: try again then
+const cleanModel = (m) => (typeof m === "string" && /^[A-Za-z0-9][\w.\-[\]/]{0,79}$/.test(m) ? m : null); // the limit stopped it but gave no time: try again then
 
 const store = new Store(process.env.B5_DATA || path.join(ROOT, "data"));
 const UPLOADS = path.join(store.dataDir, "uploads");
@@ -352,6 +354,16 @@ function sessionFor(thread) {
   else if (have) return have.session;
   if (!project) throw new Error("This thread's project is gone.");
   if (thread.dir && !fs.existsSync(thread.dir)) throw new Error("This thread's worktree has been removed. Start a new thread to carry on.");
+  // Another agent has no accounts, spare, or Claude flags: it's started with just the folder, the conversation to resume, and the model.
+  const provider = providerOf(thread);
+  if (provider !== "claude") {
+    if (sessions.size >= MAX_RUNNING) closeOldestIdle();
+    const other = createSession(provider, { cwd: thread.dir || project.dir, sessionId: thread.sessionId || thread.forkFrom || null, fork: !thread.sessionId && !!thread.forkFrom, model: thread.modelPref || null });
+    other.on("event", (ev) => onEvent(thread.id, other, ev));
+    other.on("exit", () => forgetSession(thread.id, other));
+    sessions.set(thread.id, { session: other, idleTimer: null });
+    return other;
+  }
   const acct = accountFor(thread);
   if (thread.account !== acct.id) {
     store.save(updateThread(store.state, thread.id, { account: acct.id }, thread.updatedAt));
@@ -520,7 +532,7 @@ function onEvent(threadId, session, ev, spareProjectId = null) {
   if (ev.kind === "tool" && ev.change) turnEdited.add(threadId);
   if (ev.kind === "done" && !ev.more) checkpointAfter(threadId);
   // Effort changed during the turn: the next message starts Claude Code again with it.
-  if (ev.kind === "done" && !ev.more && session.effort !== (store.state.threads.find((x) => x.id === threadId)?.effort || null)) session.close();
+  if (ev.kind === "done" && !ev.more && session instanceof ClaudeSession && session.effort !== (store.state.threads.find((x) => x.id === threadId)?.effort || null)) session.close();
   if (ev.kind === "done" && !ev.more && turnEdited.delete(threadId) && ev.ok) checksAfterTurn(threadId).catch((e) => console.error(`Checks: ${e.message}`));
   // The page takes the inbox's facts from here rather than working them out again.
   broadcast(threadId, inbox ? { ...ev, inbox } : ev);
@@ -529,9 +541,18 @@ function onEvent(threadId, session, ev, spareProjectId = null) {
   // A page Claude just wrote or changed: kept as a version, and shown as a card.
   const art = artifacts.noteResult(ev);
   if (art) { store.appendLog(threadId, art); broadcast(threadId, art); }
-  if (ev.kind === "done" && !ev.ok && !ev.more) noteLimit(threadId, ev, session);
+  if (ev.kind === "done" && !ev.ok && !ev.more) {
+    // Claude's limits are read from its own events and tracked per account; another agent's is recognised by its error.
+    if (providerOf(store.state.threads.find((x) => x.id === threadId)) === "claude") noteLimit(threadId, ev, session);
+    else noteAgentLimit(threadId, ev);
+  }
   // A turn that went through: its account isn't at its limit, whatever was thought.
-  if (ev.kind === "done" && ev.ok && !ev.more && isLimited(store.state.accountLimits, session.account)) setLimit(session.account, 0);
+  if (ev.kind === "done" && ev.ok && !ev.more && session instanceof ClaudeSession && isLimited(store.state.accountLimits, session.account)) setLimit(session.account, 0);
+  // The same for another agent: a turn that went through says it isn't at its limit after all.
+  if (ev.kind === "done" && ev.ok && !ev.more && !(session instanceof ClaudeSession) && threadId) {
+    const other = providerOf(store.state.threads.find((x) => x.id === threadId));
+    if (store.state.agentLimits?.[other]) setAgentLimit(other, 0);
+  }
   if (ev.kind === "done" && !ev.more) lastUsage.delete(threadId); // only a turn's own refusal counts
   // A queued task's turn has ended: its checks, then done, another try, or stuck.
   if (ev.kind === "done" && !ev.more) queueAfterTurn(threadId, ev).catch((e) => console.error(`Queue: ${e.message}`));
@@ -588,11 +609,154 @@ function noteLimit(threadId, ev, session) {
       } catch (e) { console.error(`Moving ${threadId} to another account: ${e.message}`); }
     }
   }
-  if (!store.state.settings?.autoResume) return;
-  // Every account refusing: wait for the first to reset, a minute past it so the first request isn't refused again.
-  // Switching off: the thread stays on its own account, so it waits for that one.
-  const first = (store.state.settings?.autoSwitch !== false ? firstReset(allAccounts(store.state), store.state.accountLimits, signedIn, Date.now()) : 0) || until;
-  setResume(threadId, { at: first + 60 * 1000, known: at > 0 });
+  if (store.state.settings?.autoResume) {
+    // Every account refusing: wait for the first to reset, a minute past it so the first request isn't refused again.
+    // Switching off: the thread stays on its own account, so it waits for that one.
+    const first = (store.state.settings?.autoSwitch !== false ? firstReset(allAccounts(store.state), store.state.accountLimits, signedIn, Date.now()) : 0) || until;
+    setResume(threadId, { at: first + 60 * 1000, known: at > 0 });
+  }
+  offerHandoff(threadId); // the wait stays as it was: Cancel leaves the thread to carry on at the reset
+}
+
+// ── Carrying a thread on with another agent ──────────────────────────────────
+// When the agent a thread runs on reaches its usage limit and none of Claude's
+// accounts is free, the next agent that isn't at its limit is offered
+// (server/handoff.js). It starts by itself after HANDOFF_MS, so an overnight
+// thread isn't left waiting; Cancel leaves the thread where it is. The timer
+// is here, not in the page, so it runs with the page closed. A restart drops a
+// pending offer: the thread then carries on at its reset, as it did before.
+const handoffs = new Map(); // threadId -> { to, at, timer }
+const AGENT_LIMIT_MS = 30 * 60 * 1000; // how long another agent's limit is assumed to last: they don't say when it resets
+
+/** Whether an agent can take a turn now: Claude if one of its accounts is free, another if it's installed and not at its limit. */
+function agentFree(id) {
+  if (id === "claude") return !!pickAccount(allAccounts(store.state), store.state.accountLimits, usable);
+  return !!PROVIDERS[id]?.installed() && (store.state.agentLimits?.[id] || 0) <= Date.now();
+}
+
+function setAgentLimit(id, until) {
+  const limits = { ...(store.state.agentLimits || {}) };
+  if (until) limits[id] = until; else delete limits[id];
+  store.save({ ...store.state, agentLimits: limits });
+}
+
+/** A turn of a thread on another agent failed: if that's its usage limit, the agent is marked and the next one offered. */
+function noteAgentLimit(threadId, ev) {
+  if (!isAgentLimit(ev.error)) return;
+  const t = store.state.threads.find((x) => x.id === threadId);
+  setAgentLimit(providerOf(t), Date.now() + AGENT_LIMIT_MS);
+  offerHandoff(threadId);
+}
+
+function offerHandoff(threadId) {
+  const t = store.state.threads.find((x) => x.id === threadId);
+  const project = t && store.state.projects.find((p) => p.id === t.projectId);
+  // Chat and Work are built on Claude's own tools, a side chat belongs to its thread, and the overnight queue runs in Claude's sandbox.
+  if (!t || t.sideOf || t.queueTask || ["chat", "work"].includes(project?.kind) || store.state.settings?.agentHandoff === false) return false;
+  const from = providerOf(t);
+  const to = nextAgent({ current: from, order: Object.keys(PROVIDERS), free: agentFree });
+  if (!to) return false;
+  clearTimeout(handoffs.get(threadId)?.timer);
+  const at = Date.now() + HANDOFF_MS;
+  armHandoff(threadId, to, at);
+  const ev = { kind: "handoff_offer", from, to, fromName: PROVIDERS[from].name, toName: PROVIDERS[to].name, at, resetAt: t.resume?.at || 0 };
+  store.appendLog(threadId, ev);
+  broadcast(threadId, ev);
+  return true;
+}
+
+/** Start the countdown to `at`, and keep it with the thread: a restart (an update, say) picks it up again. */
+function armHandoff(threadId, to, at) {
+  clearTimeout(handoffs.get(threadId)?.timer);
+  handoffs.set(threadId, { to, at, timer: setTimeout(() => { runHandoff(threadId, "auto").catch((e) => console.error(`Handoff of ${threadId}: ${e.message}`)); }, Math.max(0, at - Date.now())) });
+  patchThread(threadId, { handoff: { to, at } });
+}
+
+/** After a restart: an offer that was counting down starts again, with at least 10 seconds to cancel. If the agent isn't free any more, it's cancelled. */
+function rearmHandoffs() {
+  for (const t of store.state.threads) {
+    if (!t.handoff) continue;
+    const { to } = t.handoff;
+    const still = store.state.settings?.agentHandoff !== false && to !== providerOf(t) && agentFree(to);
+    if (!still) {
+      patchThread(t.id, { handoff: undefined });
+      const from = providerOf(t);
+      store.appendLog(t.id, { kind: "handoff_cancel", from, fromName: PROVIDERS[from].name, resetAt: t.resume?.at || 0 });
+      continue;
+    }
+    const from = providerOf(t);
+    const at = Math.max(t.handoff.at, Date.now() + 10 * 1000);
+    armHandoff(t.id, to, at);
+    store.appendLog(t.id, { kind: "handoff_offer", from, to, fromName: PROVIDERS[from].name, toName: PROVIDERS[to].name, at, resetAt: t.resume?.at || 0 });
+  }
+}
+
+/** Tell the thread an offer is off (cancelled by you, or it couldn't go ahead). */
+function noteHandoffCancel(threadId) {
+  const t = store.state.threads.find((x) => x.id === threadId);
+  const from = providerOf(t);
+  const ev = { kind: "handoff_cancel", from, fromName: PROVIDERS[from].name, resetAt: t?.resume?.at || 0 };
+  store.appendLog(threadId, ev);
+  broadcast(threadId, ev);
+}
+
+function cancelHandoff(threadId) {
+  if (!handoffs.has(threadId)) return false;
+  dropHandoff(threadId);
+  noteHandoffCancel(threadId);
+  return true;
+}
+
+/** A deleted thread's pending offer goes with it. */
+function dropHandoff(threadId) {
+  clearTimeout(handoffs.get(threadId)?.timer);
+  handoffs.delete(threadId);
+  if (store.state.threads.find((x) => x.id === threadId)?.handoff) patchThread(threadId, { handoff: undefined });
+}
+
+/**
+ * Move the thread to another agent now and send it the conversation so far.
+ * `want`: that agent (Switch back); otherwise the one offered, or the next free.
+ * @returns {Promise<{ok: boolean, error?: string}>}
+ */
+async function runHandoff(threadId, how, want = null) {
+  const offered = handoffs.get(threadId);
+  dropHandoff(threadId);
+  // An offer that can't go ahead is closed in the thread, not left counting down on the page.
+  const no = (error) => { if (offered) noteHandoffCancel(threadId); return { ok: false, error }; };
+  let t = store.state.threads.find((x) => x.id === threadId);
+  if (!t) return { ok: false, error: "No such thread." };
+  if (sessions.get(threadId)?.session.busy) return no("This thread is working.");
+  const from = providerOf(t);
+  const to = want || offered?.to || nextAgent({ current: from, order: Object.keys(PROVIDERS), free: agentFree });
+  if (!to || !PROVIDERS[to] || to === from) return no("No other agent is free.");
+  if (!agentFree(to)) return no(`${PROVIDERS[to].name} is at its limit.`);
+  // The new agent's model first: looking it up can take seconds, and a message sent meanwhile must not be cut off by the move.
+  let modelPref = null; // Claude: its own default; another agent: its first free model
+  if (to !== "claude") { const models = await providerModels(to); modelPref = (models.find((m) => m.free) || models[0])?.value || null; }
+  t = store.state.threads.find((x) => x.id === threadId);
+  if (!t) return { ok: false, error: "No such thread." };
+  if (sessions.get(threadId)?.session.busy) return no("This thread started working meanwhile.");
+  if (providerOf(t) !== from) return no("This thread moved meanwhile.");
+  const brief = handoffBrief({ log: store.readLog(threadId), fromName: PROVIDERS[from].name }); // after the wait, so it has anything said during it
+  closeSession(threadId);
+  setResume(threadId, null, "handoff"); // it isn't waiting for a reset any more
+  store.save(updateThread(store.state, threadId, {
+    provider: to, sessionId: null, forkFrom: undefined, model: undefined, modelPref, handoffFrom: from, // `model`: what the old session ran, until the new one says
+    ...(to === "claude" ? { account: (pickAccount(allAccounts(store.state), store.state.accountLimits, usable) || accountById(MAIN)).id } : {}),
+  }, t.updatedAt));
+  const ev = { kind: "handoff_done", from, to, fromName: PROVIDERS[from].name, toName: PROVIDERS[to].name, how, modelPref };
+  store.appendLog(threadId, ev);
+  broadcast(threadId, ev);
+  try {
+    sendToThread(store.state.threads.find((x) => x.id === threadId), brief, [], { auto: "handoff" });
+  } catch (e) {
+    const err = { kind: "error", text: `Couldn't start ${PROVIDERS[to].name}: ${e.message}` };
+    store.appendLog(threadId, err);
+    broadcast(threadId, err);
+    return { ok: false, error: e.message };
+  }
+  return { ok: true };
 }
 
 /** An account at its limit until `until` (0: not any more). Kept with B5 Code's state, so a restart keeps it. */
@@ -1237,6 +1401,7 @@ async function throwAway(t) {
     await new Promise((resolve) => execFile("git", ["-C", project.dir, "branch", "-D", t.branch], { windowsHide: true, timeout: 20000 }, () => resolve()));
   }
   dropCheckpoints(t);
+  dropHandoff(t.id);
   store.save(removeThread(store.state, t.id));
   store.deleteLog(t.id);
 }
@@ -1312,6 +1477,7 @@ function dropCheckpoints(thread) {
 }
 
 function sendToThread(thread, text, attachments, extra = {}) {
+  cancelHandoff(thread.id); // a message in the 30 seconds, yours or a resume's: the thread is going on as it is
   // A new turn on an account at its limit goes to one that isn't, rather than be refused.
   const idle = !sessions.get(thread.id)?.session.busy;
   if (idle && thread.account && isLimited(store.state.accountLimits, thread.account) && store.state.settings?.autoSwitch !== false) {
@@ -1868,6 +2034,9 @@ async function api(req, res, url) {
     return send(res, 200, { path: dir, home: REAL_HOME, parent: within(REAL_HOME, dir) ? null : path.dirname(dir), git: fs.existsSync(path.join(dir, ".git")), folders: folders.slice(0, 500) });
   }
 
+  // The agents a thread can run on, whether each is installed, and what it can do.
+  if (method === "GET" && parts[0] === "providers" && parts.length === 1) return send(res, 200, { providers: await providersWithModels() });
+
   // Accounts: the main one and extra ones, signed in through `claude auth login` (Mac only).
   if (parts[0] === "accounts") {
     if (req.b5Remote) return send(res, 403, { error: `Accounts are managed from the ${MAC}.` });
@@ -2372,7 +2541,16 @@ async function api(req, res, url) {
   if (method === "POST" && parts[0] === "threads" && parts.length === 1) {
     const body = await readBody(req);
     const patch = cleanModel(body.model) ? { modelPref: cleanModel(body.model) } : {};
-    if (EFFORTS.includes(body.effort)) patch.effort = body.effort;
+    // Another agent than Claude, if it's installed; a thread without `provider` is Claude's.
+    const other = PROVIDERS[body.provider] && body.provider !== "claude" ? body.provider : null;
+    if (other) {
+      if (!PROVIDERS[other].installed()) return send(res, 400, { error: `${PROVIDERS[other].name} isn't installed on this computer.` });
+      // Chat and Work are built on Claude's own tools and restrictions: another agent would run without them.
+      const home = store.state.projects.find((p) => p.id === body.projectId);
+      if (["chat", "work"].includes(home?.kind)) return send(res, 400, { error: `${PROVIDERS[other].name} can't be used in a ${home.kind === "chat" ? "Chat" : "Work"} space.` });
+      patch.provider = other;
+    }
+    if (!other && EFFORTS.includes(body.effort)) patch.effort = body.effort; // only Claude has a thinking-effort setting
     // Studio's Claude tab: one thread per video, named after it (so it isn't renamed from its first message).
     if (typeof body.studioVideo === "string" && /^[a-z0-9-]{1,60}$/.test(body.studioVideo)) {
       patch.studioVideo = body.studioVideo;
@@ -2420,6 +2598,7 @@ async function api(req, res, url) {
         store.deleteLog(t.id);
         dropCheckpoints(t);
       }
+      dropHandoff(thread.id);
       store.save(removeThread(store.state, thread.id));
       return send(res, 200, { ok: true });
     }
@@ -2584,6 +2763,18 @@ async function api(req, res, url) {
 
     if (method === "POST" && action === "stop") {
       return send(res, 200, { ok: !!sessions.get(thread.id)?.session.interrupt() });
+    }
+
+    // Carrying on with another agent at a limit: Cancel the offer, Carry on now, or Switch back to the one it came from.
+    if (method === "POST" && action === "handoff") {
+      const body = await readBody(req);
+      if (body.action === "cancel") return send(res, 200, { ok: cancelHandoff(thread.id) });
+      if (body.action === "now" || body.action === "back") {
+        if (body.action === "back" && !thread.handoffFrom) return send(res, 400, { error: "This thread hasn't moved to another agent." });
+        const r = await runHandoff(thread.id, body.action, body.action === "back" ? thread.handoffFrom : null);
+        return send(res, r.ok ? 200 : 409, r.ok ? { ok: true } : { error: r.error });
+      }
+      return send(res, 400, { error: "Unknown action." });
     }
 
     if (method === "POST" && action === "permission") {
@@ -3025,6 +3216,8 @@ tailnetAtStart();
 }
 
 server.listen(PORT, HOST, () => {
+  rearmHandoffs();
+  providersWithModels().catch(() => {}); // the first look at another agent's models takes seconds: done before the menu is opened
   // Settings › Studio › Start with B5 Code: the editor is ready before Studio is opened.
   if (store.state.settings?.studioAutostart !== false && !IS_WIN) { // B5 Studio is a Mac project: not looked for on Windows
     const dir = studioDir(store.state.projects, HOME);

@@ -95,6 +95,18 @@ test("a side chat forks its parent's conversation in its folder, and goes with i
   assert.equal(removeThread(s2, thread.id).threads.length, 0);
 });
 
+test("a side chat runs on its parent's agent, since it forks that agent's own conversation", () => {
+  const s = addProject(emptyState(), { dir: "/a" }).state;
+  const { state, thread } = addThread(s, s.projects[0].id);
+  const other = updateThread(state, thread.id, { provider: "opencode", sessionId: "ses_1", modelPref: "opencode/big-pickle" });
+  const { thread: side } = addSide(other, thread.id);
+  assert.equal(side.provider, "opencode");
+  assert.equal(side.forkFrom, "ses_1");
+  assert.equal(side.modelPref, "opencode/big-pickle");
+  const { thread: claudeSide } = addSide(updateThread(state, thread.id, { sessionId: "sess-2" }), thread.id);
+  assert.equal(claudeSide.provider, undefined, "a Claude thread's side chat is Claude's, as before");
+});
+
 test("the threads a restart cut short are still known to the server that starts after it", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "b5-carry-"));
   const a = new Store(dir);
