@@ -25,10 +25,11 @@ import { ASK_TOOL } from "../web/questions.js";
 
 /** Where `opencode` is, or null: on the PATH, or where its installers put it. */
 export function findOpenCode({ env = process.env, exists = fs.existsSync, home = HOME_DIR, win = IS_WIN } = {}) {
+  const P = win ? path.win32 : path.posix; // the path style of the platform asked about, as server/platform.js does, so this is the same on any computer
   const dirs = String(env.PATH || env.Path || "").split(win ? ";" : ":").filter(Boolean);
-  dirs.push(path.join(home, ".local", "bin"), path.join(home, ".opencode", "bin"));
+  dirs.push(P.join(home, ".local", "bin"), P.join(home, ".opencode", "bin"));
   for (const d of dirs) {
-    const f = path.join(d, win ? "opencode.exe" : "opencode");
+    const f = P.join(d, win ? "opencode.exe" : "opencode");
     if (exists(f)) return f;
   }
   return null;

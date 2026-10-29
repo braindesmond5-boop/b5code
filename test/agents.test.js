@@ -33,6 +33,10 @@ test("OpenCode is found on the PATH or where its installers put it, and is null 
   assert.equal(findOpenCode({ env: { PATH: "/a:/b" }, home: "/h", win: false, exists: has(["/b/opencode"]) }), "/b/opencode");
   assert.equal(findOpenCode({ env: { PATH: "/a" }, home: "/h", win: false, exists: has(["/h/.local/bin/opencode"]) }), "/h/.local/bin/opencode");
   assert.equal(findOpenCode({ env: { PATH: "/a" }, home: "/h", win: false, exists: () => false }), null);
+  // The same on Windows, whichever computer this runs on.
+  const win = (set) => (f) => set.includes(f);
+  assert.equal(findOpenCode({ env: { Path: "C:\\a;C:\\b" }, home: "C:\\Users\\me", win: true, exists: win(["C:\\b\\opencode.exe"]) }), "C:\\b\\opencode.exe");
+  assert.equal(findOpenCode({ env: { Path: "C:\\a" }, home: "C:\\Users\\me", win: true, exists: win(["C:\\Users\\me\\.opencode\\bin\\opencode.exe"]) }), "C:\\Users\\me\\.opencode\\bin\\opencode.exe");
 });
 
 const user = { type: "message.updated", properties: { info: { id: "m1", role: "user" } } };
