@@ -1645,7 +1645,9 @@ const phoneMayNotRead = (req, file) => !!req.b5Remote && isPrivate(path.relative
 function servePreview(req, res, secret, rest, frameAncestors, version = null, remote = false) {
   let file = realFile(previewPathIn(rest, HOME));
   if (!file) return send(res, 404, "Not found, or not in your home folder.", "text/plain");
-  if (inScope(file, REAL_DATA)) return send(res, 403, "B5 Code's own data isn't shown.", "text/plain");
+  // Only the pictures you attached are shown from the data folder, to the conversation's thumbnails.
+  const attachedPicture = secret === PREVIEW_TOKEN && inScope(file, path.join(REAL_DATA, "uploads")) && /^\.(png|jpe?g|gif|webp)$/i.test(path.extname(file));
+  if (inScope(file, REAL_DATA) && !attachedPicture) return send(res, 403, "B5 Code's own data isn't shown.", "text/plain");
   if (remote && isPrivate(path.relative(REAL_HOME, file))) return send(res, 403, `Hidden and secret files open on the ${MAC} only.`, "text/plain");
   let st = fs.statSync(file);
   if (st.isDirectory()) {
