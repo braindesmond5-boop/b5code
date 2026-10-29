@@ -742,7 +742,7 @@ function renderSide() {
   const phone = phoneWidth();
   const spaceTabs = h("div", { class: "spaces" + (phone ? " tabbar" : ""), role: "tablist", "aria-label": "Spaces" }, ...SPACES_NOW().map(([id, label, ic]) =>
     h("button", { type: "button", role: "tab", "aria-selected": String(space === id), class: space === id ? "on" : "", title: label, "aria-label": label, onclick: () => setSpace(id) }, icon(ic, phone ? 20 : 14), h("span", { class: "space-label" }, label))));
-  fill($("side"), ...[
+  const nodes = [
     phone
       // On a phone: the space's name, large, with Search, New and you; the spaces are a tab bar below.
       ? h("div", { class: "side-top phone-top" },
@@ -778,7 +778,15 @@ function renderSide() {
         usageRing()),
       h("button", { class: "icon", type: "button", title: `Guide (${KEY()}/)`, "aria-label": "Guide", onclick: () => openGuide() }, icon("help", 16)),
       h("button", { class: "icon", type: "button", title: `Settings (${KEY()},)`, "aria-label": "Settings", onclick: () => openSettings() }, icon("settings", 16))),
-  ].filter(Boolean));
+  ].filter(Boolean);
+  // While Claude streams this runs ~25 times a second. Swapping identical buttons under the pointer
+  // loses the click (the button pressed is gone by release) and resets hover and scroll, so only swap on a change.
+  const side = $("side");
+  if (nodes.map((n) => n.outerHTML).join("") === side.innerHTML) return;
+  const top = side.querySelector(".side-list")?.scrollTop || 0;
+  fill(side, ...nodes);
+  const list = side.querySelector(".side-list");
+  if (list) list.scrollTop = top;
 }
 
 // Plan usage, as the Claude app shows it: Claude Code's /usage (read by the
